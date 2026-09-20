@@ -18,6 +18,23 @@ counter to that: it looks at whichever error dominates and either re-asks with
 a rescaled length (distance miss) or builds an explicit waypoint loop aimed
 using the terrain store (ascent miss).
 
+## Two versions in this folder
+
+There are now two implementations of the same app:
+
+- **`web/`** the static version. Runs entirely in the browser, calls
+  OpenRouteService directly, needs no server. This is the one that works on an
+  iPhone, and the one published to GitHub Pages.
+- **the Python files in this folder** the original server version. FastAPI plus
+  the same logic in Python, run locally on a laptop.
+
+They share no code, so **a change to one does not reach the other**. That is a
+real maintenance cost and it was an accepted trade of going server-free. If you
+settle on the static version, the Python files and their tests can be deleted;
+say so and they will be removed in one go.
+
+The rest of this README covers the server version first, then the static one.
+
 ## Setup
 
 Requires Python 3.11 or newer.
@@ -136,3 +153,60 @@ it. It only ever grows, and it costs nothing.
 - **Single user, local only.** No accounts, no database, no saved routes, no
   GPX export. Identical requests are cached in `ors_cache.json`, so repeating a
   search is free; delete that file to force fresh routing.
+
+## The static version, and using it on an iPhone
+
+`web/` holds a self-contained app: `index.html`, `app.js` for the interface,
+`routefinder.js` for the search engine and `config.js` for the settings. No
+build step, no framework, no server.
+
+### Your key on the phone
+
+The key is not in the code and not in this repo. You paste it into the Settings
+panel on the page once, and it is kept in that browser's local storage. It is
+only ever sent to OpenRouteService. Clearing Safari's website data or using
+Private Browsing loses it, and the page says so when it cannot save.
+
+### Previewing it locally
+
+ES modules will not load from a `file://` URL, so use any static server:
+
+```bash
+cd s10-route-finder/web
+python3 -m http.server 8080
+```
+
+Then open <http://127.0.0.1:8080>.
+
+### Publishing it to GitHub Pages
+
+Once the repository is public and Pages is switched on, the app lives at a URL
+you can open on the phone. On the iPhone, open that URL in Safari, then Share,
+then **Add to Home Screen** for an icon that opens without Safari's chrome.
+
+### Tests
+
+The engine has its own tests, with no dependencies to install:
+
+```bash
+cd s10-route-finder
+node --test web-tests/*.test.js
+```
+
+They cover the same ground as the Python suite, including a check that the
+ported ascent maths returns the same number as the Python version on identical
+input. Nothing in them touches the network.
+
+### What differs from the server version
+
+- **The terrain store lives in the browser**, not in `terrain.json`, so the
+  phone and the laptop build separate stores that never merge. To keep the
+  store small enough for a phone, only the elevation is kept per grid cell and
+  the position is derived from the cell key, which is accurate to about 50 m.
+- **The request cache is per session only.** Route geometries are large and
+  local storage is limited to a few megabytes, so repeating a search in a new
+  tab costs requests again.
+- **It depends on OpenRouteService permitting direct browser requests.** Their
+  own web map works this way, so it should be fine, but if a search fails with
+  a CORS error in the browser console, that is the cause, and the static
+  version cannot work without a proxy or a server.

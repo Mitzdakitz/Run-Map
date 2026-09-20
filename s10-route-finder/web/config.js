@@ -1,0 +1,52 @@
+/* Everything worth recalibrating. Mirrors config.py in the server version. */
+export const CONFIG = {
+  // --- OpenRouteService ---------------------------------------------------
+  ORS_BASE_URL: 'https://api.openrouteservice.org',
+  ORS_PROFILE: 'foot-walking',
+  // Free tier: 40 directions requests a minute (HTTP 429) and 2000 a day
+  // (HTTP 403). Space requests out to stay under the minute limit.
+  ORS_MIN_REQUEST_INTERVAL_MS: 1600,
+  ORS_RATE_LIMIT_PER_MINUTE: 40,
+  ORS_RATE_LIMIT_PER_DAY: 2000,
+
+  // --- Search budget ------------------------------------------------------
+  REQUEST_BUDGET: 12,
+  LOOP_PASS1_REQUESTS: 6,
+  REFINE_TOP_N: 2,
+  LOOP_WAYPOINT_COUNT: 3,
+  LOOP_WAYPOINT_FACTOR: 0.25,
+  OUT_AND_BACK_DESTINATIONS: 7,
+  OUT_AND_BACK_FACTOR: 0.38,
+
+  // --- Start point and bounds --------------------------------------------
+  DEFAULT_START: { lat: 53.3736, lon: -1.5040 },   // Broomhill / Crookes, S10
+  DEFAULT_ZOOM: 14,
+  BBOX: { minLat: 53.28, maxLat: 53.47, minLon: -1.78, maxLon: -1.35 },
+
+  // --- Inputs -------------------------------------------------------------
+  MIN_DISTANCE_KM: 1,
+  MAX_DISTANCE_KM: 30,
+  // Metres of ascent per km. Placeholders: recalibrate against your own runs.
+  CLIMB_PRESETS: { low: 5, medium: 15, high: 30 },
+
+  // --- Ascent measurement -------------------------------------------------
+  ASCENT_THRESHOLD_M: 3,
+  ELEVATION_SMOOTHING_WINDOW: 5,
+
+  // --- Scoring ------------------------------------------------------------
+  W_DIST: 0.5,
+  W_ASC: 0.5,
+  DISTANCE_TOLERANCE: 0.05,
+  ASCENT_TOLERANCE: 0.15,
+  RESULTS_RETURNED: 3,
+
+  // --- Terrain store ------------------------------------------------------
+  TERRAIN_GRID_M: 50,
+  TERRAIN_SEARCH_RADIUS_FRACTION: 0.35,
+  // A phone's local storage is about 5 MB. Each cell costs roughly 20 bytes,
+  // so this cap leaves plenty of room and still covers a whole city.
+  MAX_TERRAIN_POINTS: 150000,
+};
+
+export const SHAPE_LOOP = 'loop';
+export const SHAPE_OUT_AND_BACK = 'out_and_back';
