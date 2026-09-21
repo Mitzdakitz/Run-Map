@@ -249,6 +249,46 @@
 #diagnosis .probe { flex: 1 1 auto; min-width: 0; }
 #diagnosis .probe .note { display: block; color: var(--muted); font-size: 12px; }
 #diagnosis .result { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); }
+/* --- plotting and saved routes --- */
+.map-tools {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 9px 13px 0;
+}
+.plot-bar {
+  display: grid; gap: 8px;
+  padding: 10px 13px; border-top: 1px solid var(--line-soft);
+  background: var(--sunken);
+}
+.plot-stats { margin: 0; font-size: 14px; font-weight: 600; }
+.plot-stats .num { font-variant-numeric: tabular-nums; }
+.plot-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.saved-list { display: grid; gap: 8px; }
+.saved-row {
+  display: flex; gap: 10px; align-items: center;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface);
+}
+.saved-row .what { flex: 1 1 auto; min-width: 0; }
+.saved-row .name {
+  display: block; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.saved-row .meta { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.saved-row .acts { flex: none; display: flex; gap: 6px; }
+
+/* --- the map follows you down the page on a phone --- */
+/* A sticky grid item only sticks inside its own row, and on one column every
+   panel is its own row, so the grid becomes ordinary blocks at this width. */
+@media (max-width: 899px) {
+  .grid { display: block; }
+  .grid > .panel { margin-bottom: 12px; }
+  .grid > .panel.map-panel {
+    position: sticky; top: 0; z-index: 400;
+    margin-bottom: 12px;
+  }
+  .map-panel #map { height: 36vh; transition: height 160ms ease; }
+  .map-panel.compact #map { height: 19vh; min-height: 140px; }
+}
 </style>
 </head>
 <body>
@@ -311,13 +351,30 @@
   <div id="messages"></div>
 
   <div class="grid">
-    <section class="panel">
+    <section class="panel map-panel">
       <div class="map-shell">
         <div id="map"></div>
         <div class="map-legend">
           <span class="pill" id="startPill">Start</span>
           <span class="pill" id="dirPill" hidden>Clockwise</span>
         </div>
+      </div>
+      <div class="map-tools">
+        <button class="chip" type="button" id="plotBtn" aria-pressed="false">Plot your own</button>
+        <button class="chip" type="button" id="mapSizeBtn" aria-pressed="false">Shrink map</button>
+      </div>
+      <div class="plot-bar" id="plotBar" hidden>
+        <p class="plot-stats" id="plotStats">Tap the map to place your first point.</p>
+        <div class="plot-actions">
+          <button class="chip" type="button" id="plotLoop" aria-pressed="false">Close the loop</button>
+          <button class="chip" type="button" id="plotUndo">Undo</button>
+          <button class="chip" type="button" id="plotClear">Clear</button>
+          <button class="chip" type="button" id="plotDone">Done</button>
+        </div>
+        <p class="hint" id="plotHelp" style="margin:0">
+          Tap the map to add a point, drag a point to move it, tap the line to add one in
+          between, tap a point to remove it. Save it under Saved routes below.
+        </p>
       </div>
       <div class="map-foot">
         <span id="budgetText">Tap the map to set your start</span>
@@ -335,6 +392,24 @@
         <div class="cards" id="cards"></div>
         <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
         <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
+      </div>
+    </section>
+
+    <section class="panel span-all">
+      <div class="head">
+        <h2>Saved routes</h2>
+        <span class="hint" id="savedCount"></span>
+      </div>
+      <div class="body">
+        <div class="field">
+          <input type="text" id="routeName" maxlength="80" autocomplete="off"
+                 placeholder="Name the route on screen" aria-label="Name for the route being saved">
+          <button type="button" class="primary" id="saveRouteBtn">Save</button>
+        </div>
+        <div class="saved-list" id="savedList"></div>
+        <div class="empty" id="savedEmpty">
+          Nothing saved yet. Search for a route or plot your own, then name it and press Save.
+        </div>
       </div>
     </section>
 

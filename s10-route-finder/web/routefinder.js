@@ -7,7 +7,7 @@
  *
  * Kept free of DOM and browser globals so it can be unit tested under node.
  */
-import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK } from './config.js';
+import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 111320;
@@ -414,7 +414,12 @@ export function parseRoute(featureCollection) {
   if (summary.distance === undefined) {
     throw new OrsError('OpenRouteService returned a route with no distance summary.');
   }
-  return { coords, distanceM: Number(summary.distance) };
+  /* way_points gives the index, within the geometry, of each point that was
+   * asked for. That is what tells a tap on the drawn line which pair of your
+   * own points it falls between, which straight line geometry cannot: a route
+   * that doubles back passes close to segments it does not belong to. */
+  const wayPoints = (features[0].properties && features[0].properties.way_points) || [];
+  return { coords, distanceM: Number(summary.distance), wayPoints };
 }
 
 // --- candidates and scoring ------------------------------------------------
@@ -1095,4 +1100,264 @@ export function readDiagnosis(results) {
       + 'connection, or something on the network blocking the requests. Try '
       + 'mobile data instead of wifi, or the other way round.',
   };
+}
+
+// --- hand plotted routes ---------------------------------------------------
+/* Routes you place yourself, rather than ones the search generates. Each point
+ * is snapped to the path network by the routing service, so the line stays a
+ * route you could actually run and the elevation is real rather than guessed. */
+
+export const MIN_PLOTTED_POINTS = 2;
+
+export async function routeThrough(client, waypoints, { closeLoop = false } = {}) {
+  const points = (waypoints || []).filter(
+    (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon),
+  );
+  if (points.length < MIN_PLOTTED_POINTS) {
+    throw new OrsError('A route needs at least two points.');
+  }
+  const ordered = closeLoop ? [...points, points[0]] : points;
+  const data = await client.directions(ordered.map((p) => [p.lon, p.lat]));
+  const { coords, distanceM, wayPoints } = parseRoute(data);
+  const { ascent, descent } = ascentDescentFromCoords(coords);
+  return {
+    coords, distanceM, wayPoints, closeLoop,
+    ascentM: ascent, descentM: descent,
+    waypoints: points.map((p) => ({ lat: p.lat, lon: p.lon })),
+  };
+}
+
+/* Distance from a point to a line segment, in metres. Local flat earth, which
+ * is accurate well past the length of any segment this is used on. */
+export function distanceToSegmentM(p, a, b) {
+  const scale = Math.cos((p.lat * Math.PI) / 180);
+  const x = (v) => v.lon * scale * M_PER_DEG_LAT;
+  const y = (v) => v.lat * M_PER_DEG_LAT;
+  const px = x(p); const py = y(p);
+  const ax = x(a); const ay = y(a);
+  const bx = x(b); const by = y(b);
+  const dx = bx - ax; const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/* Which point of the drawn geometry is nearest to a tap. */
+export function nearestCoordIndex(coords, lat, lon) {
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < coords.length; i += 1) {
+    const d = haversineM(lat, lon, coords[i][1], coords[i][0]);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return { index: best, distanceM: bestD };
+}
+
+/* Where a new point belongs in the list you placed. Uses the geometry indices
+ * when the routing service supplied them, and falls back to straight lines
+ * between your points when it did not. */
+export function insertionIndex(route, lat, lon) {
+  const waypoints = (route && route.waypoints) || [];
+  if (waypoints.length < 2) return waypoints.length;
+
+  const wayPoints = (route.wayPoints || []).slice();
+  const coords = route.coords || [];
+  if (wayPoints.length >= 2 && coords.length) {
+    const { index } = nearestCoordIndex(coords, lat, lon);
+    for (let i = 0; i < wayPoints.length - 1; i += 1) {
+      if (index >= wayPoints[i] && index <= wayPoints[i + 1]) return i + 1;
+    }
+    return waypoints.length;
+  }
+
+  const target = { lat, lon };
+  const legs = route.closeLoop ? waypoints.length : waypoints.length - 1;
+  let best = 1;
+  let bestD = Infinity;
+  for (let i = 0; i < legs; i += 1) {
+    const d = distanceToSegmentM(target, waypoints[i], waypoints[(i + 1) % waypoints.length]);
+    if (d < bestD) { bestD = d; best = i + 1; }
+  }
+  return best;
+}
+
+export function insertWaypoint(waypoints, index, point) {
+  const out = waypoints.slice();
+  out.splice(Math.max(0, Math.min(out.length, index)), 0, { lat: point.lat, lon: point.lon });
+  return out;
+}
+
+export function moveWaypoint(waypoints, index, point) {
+  if (index < 0 || index >= waypoints.length) return waypoints.slice();
+  const out = waypoints.slice();
+  out[index] = { lat: point.lat, lon: point.lon };
+  return out;
+}
+
+export function removeWaypoint(waypoints, index) {
+  if (index < 0 || index >= waypoints.length) return waypoints.slice();
+  const out = waypoints.slice();
+  out.splice(index, 1);
+  return out;
+}
+
+// --- saved routes ----------------------------------------------------------
+/* Routes kept in this browser. Coordinates dominate the size of a route, so
+ * they are rounded and stored flat rather than as objects: a 10 km route holds
+ * roughly a thousand points, and the difference between the two is the
+ * difference between comfortably fitting and competing with the terrain store
+ * for the same few megabytes.
+ *
+ * Every write reports whether it worked. Browser storage fills up and refuses
+ * silently, and a save button that quietly does nothing is worse than one that
+ * says it could not. */
+
+const LIBRARY_VERSION = 1;
+
+function roundTo(value, places) {
+  const f = 10 ** places;
+  return Math.round(value * f) / f;
+}
+
+export function packRoute(route, { name = 'Route', id = null, savedAt = null } = {}) {
+  const p = CONFIG.COORD_PRECISION;
+  const points = [];
+  (route.coords || []).forEach((c) => {
+    points.push(roundTo(c[0], p), roundTo(c[1], p), Math.round(c[2] === undefined ? 0 : c[2]));
+  });
+  return {
+    v: LIBRARY_VERSION,
+    id: id || `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+    name: String(name || 'Route').slice(0, 80),
+    savedAt: savedAt || new Date().toISOString(),
+    distanceM: Math.round(route.distanceM || 0),
+    ascentM: Math.round(route.ascentM || 0),
+    descentM: Math.round(route.descentM || 0),
+    closeLoop: Boolean(route.closeLoop),
+    plotted: Boolean(route.waypoints && route.waypoints.length),
+    wp: (route.waypoints || []).map((w) => [roundTo(w.lat, p), roundTo(w.lon, p)]),
+    pts: points,
+  };
+}
+
+export function unpackRoute(stored) {
+  const coords = [];
+  const pts = stored.pts || [];
+  for (let i = 0; i + 2 < pts.length; i += 3) coords.push([pts[i], pts[i + 1], pts[i + 2]]);
+  return {
+    id: stored.id,
+    name: stored.name,
+    savedAt: stored.savedAt,
+    coords,
+    distanceM: stored.distanceM,
+    ascentM: stored.ascentM,
+    descentM: stored.descentM,
+    closeLoop: Boolean(stored.closeLoop),
+    waypoints: (stored.wp || []).map(([lat, lon]) => ({ lat, lon })),
+    wayPoints: [],
+  };
+}
+
+export class RouteLibrary {
+  constructor({ storage = null, limit = CONFIG.SAVED_ROUTES_LIMIT } = {}) {
+    this.storage = storage;
+    this.limit = limit;
+    this.routes = [];
+    this.load();
+  }
+
+  load() {
+    if (!this.storage) return;
+    let raw = null;
+    try { raw = this.storage.getItem(STORAGE.routes); } catch { return; }
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      const list = Array.isArray(parsed) ? parsed : (parsed.routes || []);
+      this.routes = list.filter((r) => r && r.v === LIBRARY_VERSION && Array.isArray(r.pts));
+    } catch { this.routes = []; }
+  }
+
+  get size() { return this.routes.length; }
+
+  list() {
+    return this.routes.map((r) => ({
+      id: r.id,
+      name: r.name,
+      savedAt: r.savedAt,
+      distanceM: r.distanceM,
+      ascentM: r.ascentM,
+      descentM: r.descentM,
+      plotted: Boolean(r.plotted),
+      points: Math.floor((r.pts || []).length / 3),
+    }));
+  }
+
+  get(id) {
+    const found = this.routes.find((r) => r.id === id);
+    return found ? unpackRoute(found) : null;
+  }
+
+  has(name) {
+    const wanted = String(name).trim().toLowerCase();
+    return this.routes.some((r) => r.name.trim().toLowerCase() === wanted);
+  }
+
+  /* Returns { ok, reason, id }. Never throws: a full browser store is an
+   * ordinary outcome that the interface has to be able to explain. */
+  save(route, name) {
+    if (!route || !(route.coords || []).length) {
+      return { ok: false, reason: 'There is no route to save yet.' };
+    }
+    if (this.routes.length >= this.limit && !this.has(name)) {
+      return {
+        ok: false,
+        reason: `That is ${this.limit} saved routes, which is as many as this `
+          + 'browser will hold. Delete one first.',
+      };
+    }
+    const existing = this.routes.find(
+      (r) => r.name.trim().toLowerCase() === String(name).trim().toLowerCase(),
+    );
+    const packed = packRoute(route, {
+      name,
+      id: existing ? existing.id : null,
+      savedAt: new Date().toISOString(),
+    });
+
+    const before = this.routes.slice();
+    if (existing) this.routes = this.routes.map((r) => (r.id === packed.id ? packed : r));
+    else this.routes = [packed, ...this.routes];
+
+    const written = this.write();
+    if (!written.ok) { this.routes = before; return written; }
+    return { ok: true, id: packed.id, replaced: Boolean(existing) };
+  }
+
+  remove(id) {
+    const before = this.routes.slice();
+    this.routes = this.routes.filter((r) => r.id !== id);
+    if (this.routes.length === before.length) return { ok: true, removed: false };
+    const written = this.write();
+    if (!written.ok) { this.routes = before; return written; }
+    return { ok: true, removed: true };
+  }
+
+  write() {
+    if (!this.storage) return { ok: true };
+    try {
+      this.storage.setItem(STORAGE.routes, JSON.stringify({ routes: this.routes }));
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        reason: 'This browser would not save the route. Its storage is full, and '
+          + 'the terrain store is usually what has filled it. Clearing the '
+          + 'terrain store in Settings frees the space, at the cost of the '
+          + 'elevation the app has collected.',
+      };
+    }
+  }
 }

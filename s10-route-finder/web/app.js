@@ -2,9 +2,10 @@
  * All search logic lives in routefinder.js; this file only presents it. */
 import { APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 import {
-  OrsClient, TerrainStore, diagnose, estimateSeconds, formatDuration, geocode,
-  gradientAt, gradientBand, longestClimb, parsePace, profile, readDiagnosis,
-  reverseProfile, search, steepestWindow,
+  Candidate, OrsClient, RouteLibrary, TerrainStore, diagnose, estimateSeconds,
+  formatDuration, geocode, gradientAt, gradientBand, insertWaypoint, insertionIndex,
+  longestClimb, moveWaypoint, parsePace, profile, readDiagnosis, removeWaypoint,
+  reverseProfile, routeThrough, search, steepestWindow,
 } from './routefinder.js';
 
 const $ = (id) => document.getElementById(id);
@@ -47,6 +48,26 @@ let activeProfile = [];      // the selected route, in the direction being shown
 
 const routeLayer = { lines: [], hits: [], arrows: null, cursor: null, turn: null };
 let terrainLayer = null;
+
+/* Routes you place yourself. Kept apart from the search results because the
+ * points you placed have to survive re-routing, which the drawn geometry does
+ * not: every edit throws the old line away and asks for a new one. */
+const plot = {
+  active: false,
+  waypoints: [],
+  route: null,
+  closeLoop: false,
+  markers: [],
+  line: null,
+  hit: null,
+  client: null,
+  busy: false,
+  history: [],
+  /* Leaflet can follow a drag with a click on the same marker. Without this the
+   * point you just dragged would delete itself. */
+  ignoreClicksUntil: 0,
+};
+let library = null;
 
 // --- boot ------------------------------------------------------------------
 /* Anything that throws lands on the page rather than only in a console nobody
@@ -91,6 +112,7 @@ function installErrorReporter() {
 function boot() {
   installErrorReporter();
   store = new TerrainStore({ storage: safeStorage() });
+  library = new RouteLibrary({ storage: safeStorage() });
 
   // The controls are wired before the map, so a map failure cannot take the
   // whole interface down with it.
@@ -100,6 +122,7 @@ function boot() {
   wireEvents();
   updateSummary();
   refreshTerrainCount();
+  renderSaved();
 
   try {
     initMap();
@@ -177,7 +200,10 @@ function initMap() {
     const p = startMarker.getLatLng();
     setStart(p.lat, p.lng, 'Dropped pin');
   });
-  map.on('click', (e) => setStart(e.latlng.lat, e.latlng.lng, 'Map pin'));
+  map.on('click', (e) => {
+    if (plot.active) { addPlotPoint(e.latlng.lat, e.latlng.lng); return; }
+    setStart(e.latlng.lat, e.latlng.lng, 'Map pin');
+  });
   map.on('zoomend', () => { if (activeProfile.length) drawArrows(); });
 }
 
@@ -988,6 +1014,360 @@ function toggleTerrain(on) {
 }
 
 // --- geocoding -------------------------------------------------------------
+// --- plotting your own route ----------------------------------------------
+function plotIcon(index, total) {
+  const first = index === 0;
+  const last = index === total - 1 && total > 1;
+  const fill = first ? MAP_INK : (last ? '#8e2f24' : '#FFFFFF');
+  const ink = first || last ? '#FFFFFF' : MAP_INK;
+  const label = first ? 'S' : (last && !plot.closeLoop ? 'F' : String(index + 1));
+  return L.divIcon({
+    className: '',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    html: `<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">`
+      + `<circle cx="11" cy="11" r="9" fill="${fill}" stroke="${MAP_INK}" stroke-width="2"/>`
+      + `<text x="11" y="15" text-anchor="middle" font-size="10" font-weight="700"`
+      + ` font-family="system-ui,sans-serif" fill="${ink}">${label}</text></svg>`,
+  });
+}
+
+function clearPlotLayers() {
+  if (!map) return;
+  plot.markers.forEach((m) => map.removeLayer(m));
+  plot.markers = [];
+  if (plot.line) { map.removeLayer(plot.line); plot.line = null; }
+  if (plot.hit) { map.removeLayer(plot.hit); plot.hit = null; }
+}
+
+function drawPlot() {
+  if (!map) return;
+  clearPlotLayers();
+  if (!plot.active && !plot.waypoints.length) return;
+
+  if (plot.route && plot.route.coords.length) {
+    const latLngs = plot.route.coords.map((c) => [c[1], c[0]]);
+    plot.line = L.polyline(latLngs, { color: MAP_INK, weight: 5, opacity: 0.95 }).addTo(map);
+    if (plot.active) {
+      plot.hit = L.polyline(latLngs, {
+        color: '#000', opacity: 0, weight: 24, className: 'route-hit',
+      }).addTo(map);
+      plot.hit.on('click', (e) => {
+        L.DomEvent.stop(e);
+        if (Date.now() < plot.ignoreClicksUntil) return;
+        const at = insertionIndex(plot.route, e.latlng.lat, e.latlng.lng);
+        pushHistory();
+        plot.waypoints = insertWaypoint(plot.waypoints, at, {
+          lat: e.latlng.lat, lon: e.latlng.lng,
+        });
+        reroute();
+      });
+    }
+  }
+
+  if (!plot.active) return;
+  plot.waypoints.forEach((w, i) => {
+    const marker = L.marker([w.lat, w.lon], {
+      draggable: true, icon: plotIcon(i, plot.waypoints.length), zIndexOffset: 1100,
+    }).addTo(map);
+    marker.bindTooltip(i === 0 ? 'Your first point. Drag to move, tap to remove.'
+      : 'Drag to move, tap to remove.', { direction: 'top', offset: [0, -14] });
+    marker.on('dragend', () => {
+      const p = marker.getLatLng();
+      plot.ignoreClicksUntil = Date.now() + 400;
+      pushHistory();
+      plot.waypoints = moveWaypoint(plot.waypoints, i, { lat: p.lat, lon: p.lng });
+      reroute();
+    });
+    marker.on('click', (e) => {
+      L.DomEvent.stop(e);
+      if (Date.now() < plot.ignoreClicksUntil) return;
+      pushHistory();
+      plot.waypoints = removeWaypoint(plot.waypoints, i);
+      reroute();
+    });
+    plot.markers.push(marker);
+  });
+}
+
+function pushHistory() {
+  plot.history.push({
+    waypoints: plot.waypoints.map((w) => ({ ...w })),
+    closeLoop: plot.closeLoop,
+  });
+  if (plot.history.length > 30) plot.history.shift();
+}
+
+function plotStatus(text) { $('plotStats').textContent = text; }
+
+function renderPlotStats() {
+  const n = plot.waypoints.length;
+  if (!n) { plotStatus('Tap the map to place your first point.'); return; }
+  if (n < 2) { plotStatus('One point placed. Tap again to make a route.'); return; }
+  if (plot.busy) { plotStatus(`Working out the route through ${n} points\u2026`); return; }
+  if (!plot.route) { plotStatus(`${n} points placed.`); return; }
+  const km = (plot.route.distanceM / 1000).toFixed(2);
+  const up = Math.round(plot.route.ascentM);
+  const seconds = estimateSeconds(plot.route.distanceM, plot.route.ascentM, paceSeconds);
+  const time = seconds ? `, about ${formatDuration(seconds)}` : '';
+  plotStatus(`${km} km, ${up} m of climb${time}`);
+  $('plotUndo').disabled = plot.history.length === 0;
+}
+
+function plotBudgetText() {
+  if (!plot.client) return;
+  const spent = plot.client.requestsUsed;
+  $('budgetText').textContent = `Plotting: spent ${spent} of ${CONFIG.PLOT_BUDGET} requests`;
+  $('quotaFill').style.width = `${Math.round((spent / CONFIG.PLOT_BUDGET) * 100)}%`;
+}
+
+async function reroute() {
+  drawPlot();
+  renderPlotStats();
+  if (plot.waypoints.length < 2) {
+    plot.route = null;
+    drawPlot();
+    showPlotAsResult();
+    return;
+  }
+  if (plot.busy) return;
+  plot.busy = true;
+  renderPlotStats();
+  try {
+    plot.route = await routeThrough(plot.client, plot.waypoints, { closeLoop: plot.closeLoop });
+    clearMessages();
+  } catch (err) {
+    message('error', err.message);
+  } finally {
+    plot.busy = false;
+    plotBudgetText();
+    drawPlot();
+    renderPlotStats();
+    showPlotAsResult();
+  }
+}
+
+/* A plotted route is shown through the same machinery as a searched one, so the
+ * elevation profile, the gradient colouring and the climb statistics all work
+ * without a second implementation. */
+function showPlotAsResult() {
+  if (!plot.route) return;
+  const targetDistanceM = Number($('distance').value) * 1000;
+  const target = {
+    distanceKm: Number($('distance').value),
+    ascentM: targetAscentM(Number($('distance').value)),
+  };
+  const candidate = new Candidate({
+    coords: plot.route.coords,
+    distanceM: plot.route.distanceM,
+    targetDistanceM,
+    targetAscentM: target.ascentM,
+    strategy: 'plotted by hand',
+    shape: 'plotted',
+  });
+  groups.unshift({
+    number: 0,
+    target,
+    plotted: true,
+    candidates: [candidate],
+    profiles: [profile(candidate.coords, candidate.distanceM)],
+  });
+  if (groups.length > 8) groups.pop();
+  selected = { group: 0, route: 0 };
+  selectRoute(0, 0, { fit: false });
+}
+
+function addPlotPoint(lat, lon) {
+  pushHistory();
+  plot.waypoints = insertWaypoint(plot.waypoints, plot.waypoints.length, { lat, lon });
+  reroute();
+}
+
+function setPlotMode(on) {
+  plot.active = on;
+  $('plotBtn').setAttribute('aria-pressed', String(on));
+  $('plotBtn').textContent = on ? 'Stop plotting' : 'Plot your own';
+  $('plotBar').hidden = !on;
+  if (startMarker) {
+    if (on) map.removeLayer(startMarker);
+    else startMarker.addTo(map);
+  }
+  if (on) {
+    if (!plot.client) plot.client = new OrsClient({ apiKey, budget: CONFIG.PLOT_BUDGET });
+    if (!apiKey) message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
+    plotBudgetText();
+  } else {
+    $('budgetText').textContent = 'Tap the map to set your start';
+    $('quotaFill').style.width = '0';
+  }
+  drawPlot();
+  renderPlotStats();
+}
+
+function clearPlot() {
+  pushHistory();
+  plot.waypoints = [];
+  plot.route = null;
+  drawPlot();
+  renderPlotStats();
+}
+
+function undoPlot() {
+  const last = plot.history.pop();
+  if (!last) return;
+  plot.waypoints = last.waypoints;
+  plot.closeLoop = last.closeLoop;
+  $('plotLoop').setAttribute('aria-pressed', String(plot.closeLoop));
+  reroute();
+}
+
+// --- saved routes ----------------------------------------------------------
+function currentRouteForSaving() {
+  if (plot.active && plot.route) {
+    return {
+      coords: plot.route.coords,
+      distanceM: plot.route.distanceM,
+      ascentM: plot.route.ascentM,
+      descentM: plot.route.descentM,
+      closeLoop: plot.closeLoop,
+      waypoints: plot.waypoints,
+    };
+  }
+  const group = groups[selected.group];
+  if (!group) return null;
+  const candidate = group.candidates[selected.route];
+  if (!candidate) return null;
+  return {
+    coords: candidate.coords,
+    distanceM: candidate.distanceM,
+    ascentM: candidate.ascentM,
+    descentM: candidate.descentM,
+    closeLoop: candidate.shape === SHAPE_LOOP,
+    waypoints: [],
+  };
+}
+
+function renderSaved() {
+  const host = $('savedList');
+  const rows = library ? library.list() : [];
+  host.textContent = '';
+  $('savedEmpty').hidden = rows.length > 0;
+  $('savedCount').textContent = rows.length
+    ? `${rows.length} of ${CONFIG.SAVED_ROUTES_LIMIT}` : '';
+
+  rows.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'saved-row';
+
+    const what = document.createElement('span');
+    what.className = 'what';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = r.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const when = new Date(r.savedAt);
+    const km = (r.distanceM / 1000).toFixed(2);
+    meta.textContent = `${km} km, ${r.ascentM} m climb`
+      + `${r.plotted ? ', plotted by hand' : ''}`
+      + ` \u00b7 ${Number.isNaN(when.getTime()) ? '' : when.toLocaleDateString()}`;
+    what.appendChild(name);
+    what.appendChild(meta);
+    row.appendChild(what);
+
+    const acts = document.createElement('span');
+    acts.className = 'acts';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'small';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openSaved(r.id));
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'small';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => deleteSaved(r.id, r.name));
+    acts.appendChild(open);
+    acts.appendChild(del);
+    row.appendChild(acts);
+
+    host.appendChild(row);
+  });
+}
+
+function saveCurrentRoute() {
+  clearMessages();
+  const route = currentRouteForSaving();
+  if (!route) {
+    message('error', 'There is no route on screen to save yet.');
+    return;
+  }
+  const typed = $('routeName').value.trim();
+  const name = typed || `${(route.distanceM / 1000).toFixed(1)} km, ${Math.round(route.ascentM)} m`;
+  const result = library.save(route, name);
+  if (!result.ok) { message('error', result.reason); return; }
+  $('routeName').value = '';
+  renderSaved();
+  message('info', result.replaced ? `Replaced "${name}".` : `Saved as "${name}".`);
+}
+
+function openSaved(id) {
+  const saved = library.get(id);
+  if (!saved) { message('error', 'That route could not be read back.'); return; }
+  clearMessages();
+
+  if (saved.waypoints.length) {
+    // It was plotted, so it can go back to being editable.
+    if (!plot.active) setPlotMode(true);
+    plot.waypoints = saved.waypoints;
+    plot.closeLoop = saved.closeLoop;
+    $('plotLoop').setAttribute('aria-pressed', String(plot.closeLoop));
+    plot.route = {
+      coords: saved.coords,
+      distanceM: saved.distanceM,
+      ascentM: saved.ascentM,
+      descentM: saved.descentM,
+      wayPoints: [],
+      waypoints: saved.waypoints,
+      closeLoop: saved.closeLoop,
+    };
+    plot.history = [];
+    drawPlot();
+    renderPlotStats();
+    showPlotAsResult();
+    message('info', `"${saved.name}" opened for editing. Drag its points to change it.`);
+  } else {
+    if (plot.active) setPlotMode(false);
+    const candidate = new Candidate({
+      coords: saved.coords,
+      distanceM: saved.distanceM,
+      targetDistanceM: saved.distanceM,
+      targetAscentM: saved.ascentM || 1,
+      strategy: `saved as "${saved.name}"`,
+      shape: saved.closeLoop ? SHAPE_LOOP : 'saved',
+    });
+    groups.unshift({
+      number: 0,
+      target: { distanceKm: saved.distanceM / 1000, ascentM: saved.ascentM },
+      candidates: [candidate],
+      profiles: [profile(candidate.coords, candidate.distanceM)],
+    });
+    if (groups.length > 8) groups.pop();
+    selectRoute(0, 0, { fit: true });
+    message('info', `"${saved.name}" opened.`);
+  }
+
+  if (map && plot.line) map.fitBounds(plot.line.getBounds(), { padding: [28, 28] });
+}
+
+function deleteSaved(id, name) {
+  const result = library.remove(id);
+  clearMessages();
+  if (!result.ok) { message('error', result.reason); return; }
+  renderSaved();
+  message('info', `Deleted "${name}".`);
+}
+
 let geocodeTimer = null;
 function onPlaceInput(value) {
   clearTimeout(geocodeTimer);
@@ -1097,6 +1477,30 @@ function wireEvents() {
   });
 
   $('diagnose').addEventListener('click', runDiagnosis);
+
+  $('plotBtn').addEventListener('click', () => setPlotMode(!plot.active));
+  $('plotDone').addEventListener('click', () => setPlotMode(false));
+  $('plotClear').addEventListener('click', clearPlot);
+  $('plotUndo').addEventListener('click', undoPlot);
+  $('plotLoop').addEventListener('click', function toggleLoop() {
+    pushHistory();
+    plot.closeLoop = !plot.closeLoop;
+    this.setAttribute('aria-pressed', String(plot.closeLoop));
+    reroute();
+  });
+  $('saveRouteBtn').addEventListener('click', saveCurrentRoute);
+  $('routeName').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveCurrentRoute();
+  });
+  $('mapSizeBtn').addEventListener('click', function toggleMapSize() {
+    const panel = document.querySelector('.map-panel');
+    const compact = !panel.classList.contains('compact');
+    panel.classList.toggle('compact', compact);
+    this.setAttribute('aria-pressed', String(compact));
+    this.textContent = compact ? 'Grow map' : 'Shrink map';
+    // Leaflet caches the size of its box, so it has to be told it changed.
+    if (map) setTimeout(() => map.invalidateSize(), 200);
+  });
 
   $('changeKey').addEventListener('click', () => {
     $('keySaved').hidden = true;

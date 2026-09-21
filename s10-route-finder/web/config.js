@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-21.9';
+export const APP_VERSION = '2026-09-22.1';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -63,6 +63,9 @@ export const CONFIG = {
   DISTANCE_TOLERANCE: 0.05,
   ASCENT_TOLERANCE: 0.15,
   RESULTS_RETURNED: 3,
+  PLOT_BUDGET: 60,               // routing requests one plotting session may spend
+  SAVED_ROUTES_LIMIT: 60,
+  COORD_PRECISION: 5,            // about 1 m, and roughly halves what a route costs to store
 
   // --- Terrain store ------------------------------------------------------
   TERRAIN_GRID_M: 50,
@@ -79,6 +82,7 @@ export const STORAGE = {
   pace: 's10.pace',
   starts: 's10.savedStarts',
   startName: 's10.startName',
+  routes: 's10.savedRoutes',
 };
 
 export const SHAPE_LOOP = 'loop';
