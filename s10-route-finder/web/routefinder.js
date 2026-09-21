@@ -659,3 +659,180 @@ export async function search({ start, targetDistanceM, targetAscentM, shape, cli
   }
   return result;
 }
+
+// --- elevation profile -----------------------------------------------------
+/* Turn a route's [lon, lat, elevation] coordinates into [[km, metres], ...]
+ * against cumulative distance along the route.
+ *
+ * Two details that matter. The elevation series is the SMOOTHED one, the same
+ * series the ascent figure is computed from, so a chart drawn from this agrees
+ * with the number beside it. And the cumulative distance is scaled so its total
+ * matches the distance ORS reported, rather than the slightly different total
+ * you get by summing great-circle hops between points. */
+export function profile(coords, summaryDistanceM = null) {
+  const usable = coords.filter((c) => c.length >= 3 && c[2] !== null && c[2] !== undefined);
+  if (usable.length < 2) return [];
+
+  const smoothed = smooth(usable.map((c) => c[2]), CONFIG.ELEVATION_SMOOTHING_WINDOW);
+
+  const cumulative = [0];
+  for (let i = 1; i < usable.length; i += 1) {
+    cumulative.push(
+      cumulative[i - 1] + haversineM(usable[i - 1][1], usable[i - 1][0], usable[i][1], usable[i][0]),
+    );
+  }
+  const measured = cumulative[cumulative.length - 1];
+  const scale = summaryDistanceM && measured > 0 ? summaryDistanceM / measured : 1;
+
+  return usable.map((c, i) => ({
+    km: (cumulative[i] * scale) / 1000,
+    ele: smoothed[i],
+    lat: c[1],
+    lon: c[0],
+  }));
+}
+
+/* Gradient per cent at a point, averaged over GRADIENT_WINDOW_M. */
+export function gradientAt(points, index, windowM = CONFIG.GRADIENT_WINDOW_M) {
+  if (points.length < 2) return 0;
+  const halfKm = windowM / 2000;
+  let lo = index;
+  let hi = index;
+  while (lo > 0 && points[index].km - points[lo].km < halfKm) lo -= 1;
+  while (hi < points.length - 1 && points[hi].km - points[index].km < halfKm) hi += 1;
+  const runM = (points[hi].km - points[lo].km) * 1000;
+  return runM <= 0 ? 0 : ((points[hi].ele - points[lo].ele) / runM) * 100;
+}
+
+/* Which of the six bands a gradient falls in. 0 is the steepest descent and 5
+ * the steepest climb, so the index orders by severity from downhill to uphill. */
+export function gradientBand(pct) {
+  const [d2, d1, u1, u2, u3] = CONFIG.GRADIENT_BANDS;
+  if (pct <= d2) return 0;
+  if (pct <= d1) return 1;
+  if (pct < u1) return 2;
+  if (pct < u2) return 3;
+  if (pct < u3) return 4;
+  return 5;
+}
+
+/* The longest run of continuous climbing, ignoring dips under the threshold.
+ * Length is measured to the PEAK, not to the current point, so a climb that
+ * flattens out at the top does not keep inflating its own length. */
+export function longestClimb(points, threshold = CONFIG.ASCENT_THRESHOLD_M) {
+  if (points.length < 2) return { km: 0, gain: 0, fromKm: 0 };
+  let best = { km: 0, gain: 0, fromKm: 0 };
+  let startIndex = 0;
+  let peak = points[0].ele;
+  let peakKm = points[0].km;
+
+  for (let i = 1; i < points.length; i += 1) {
+    const e = points[i].ele;
+    if (e >= peak - threshold) {
+      if (e > peak) { peak = e; peakKm = points[i].km; }
+      const gain = peak - points[startIndex].ele;
+      if (gain > best.gain) {
+        best = { km: peakKm - points[startIndex].km, gain, fromKm: points[startIndex].km };
+      }
+    } else {
+      startIndex = i;
+      peak = e;
+      peakKm = points[i].km;
+    }
+  }
+  return best;
+}
+
+/* The steepest stretch of a given length. Total ascent hides whether a route is
+ * one wall or a lot of rollers; this is the number that answers that. */
+export function steepestWindow(points, windowM = 200) {
+  const windowKm = windowM / 1000;
+  let best = { gain: 0, atKm: 0 };
+  let j = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    if (j < i) j = i;
+    while (j < points.length - 1 && points[j].km - points[i].km < windowKm) j += 1;
+    if (points[j].km - points[i].km >= windowKm * 0.85) {
+      const gain = points[j].ele - points[i].ele;
+      if (gain > best.gain) best = { gain, atKm: points[i].km };
+    }
+  }
+  return best;
+}
+
+/* Run the route the other way round. The distance is unchanged, but where the
+ * climbs fall is not, which in Sheffield is most of the decision. */
+export function reverseProfile(points) {
+  if (!points.length) return [];
+  const total = points[points.length - 1].km;
+  return points.slice().reverse().map((p) => ({ ...p, km: total - p.km }));
+}
+
+// --- time estimate ---------------------------------------------------------
+/* Minutes per km as seconds, from "5:40", "5.40" or "5.67". Null if unusable. */
+export function parsePace(text) {
+  if (text === null || text === undefined) return null;
+  const trimmed = String(text).trim();
+  if (!trimmed) return null;
+  const clock = trimmed.match(/^(\d{1,2})[:.,](\d{1,2})$/);
+  if (clock) {
+    const seconds = Number(clock[2]) * (clock[2].length === 1 ? 10 : 1);
+    if (seconds >= 60) return null;
+    return Number(clock[1]) * 60 + seconds;
+  }
+  const decimal = Number(trimmed);
+  return Number.isFinite(decimal) && decimal > 0 ? decimal * 60 : null;
+}
+
+/* Flat pace plus a climb penalty. Returns null when no pace is set, so the UI
+ * can show nothing rather than a number built on a guess. */
+export function estimateSeconds(distanceM, ascentM, paceSecondsPerKm) {
+  if (!paceSecondsPerKm) return null;
+  return (distanceM / 1000) * paceSecondsPerKm + ascentM * CONFIG.CLIMB_SECONDS_PER_METRE;
+}
+
+export function formatDuration(seconds) {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+// --- geocoding -------------------------------------------------------------
+/* Place search, constrained to the Sheffield bounding box so you get Crookes in
+ * S10 rather than Crookes in Queensland. This is a separate ORS endpoint with
+ * its own quota, so it never spends the routing budget. */
+export async function geocode(text, apiKey, fetchImpl = null) {
+  const query = String(text || '').trim();
+  if (query.length < 2) return [];
+  if (!apiKey) throw new OrsError('No OpenRouteService API key set. Add one in Settings.');
+
+  const b = CONFIG.BBOX;
+  const url = `${CONFIG.ORS_BASE_URL}/geocode/search`
+    + `?api_key=${encodeURIComponent(apiKey)}`
+    + `&text=${encodeURIComponent(query)}`
+    + `&boundary.rect.min_lon=${b.minLon}&boundary.rect.min_lat=${b.minLat}`
+    + `&boundary.rect.max_lon=${b.maxLon}&boundary.rect.max_lat=${b.maxLat}`
+    + `&focus.point.lon=${CONFIG.DEFAULT_START.lon}&focus.point.lat=${CONFIG.DEFAULT_START.lat}`
+    + `&size=${CONFIG.GEOCODE_RESULTS}`;
+
+  const doFetch = fetchImpl || ((...args) => globalThis.fetch(...args));
+  let response;
+  try {
+    response = await doFetch(url, { method: 'GET' });
+  } catch (err) {
+    throw new OrsError(`Could not reach the place search: ${err.message}`);
+  }
+  if (response.status === 429 || response.status === 403) {
+    throw new OrsError('Place search quota reached. Tap the map to set a start instead.');
+  }
+  if (response.status >= 400) {
+    throw new OrsError(`Place search failed (HTTP ${response.status}).`);
+  }
+  const data = await response.json();
+  return (data.features || []).map((f) => ({
+    label: (f.properties && (f.properties.label || f.properties.name)) || 'Unnamed place',
+    locality: (f.properties && (f.properties.locality || f.properties.county)) || '',
+    lat: f.geometry.coordinates[1],
+    lon: f.geometry.coordinates[0],
+  }));
+}

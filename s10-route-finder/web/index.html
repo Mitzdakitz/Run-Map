@@ -4,141 +4,377 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>S10 route finder</title>
-<meta name="theme-color" content="#1b1b1b">
+<meta name="theme-color" content="#1F5C4A">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="S10 Routes">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%231b1b1b'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='%231b1b1b'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%231F5C4A'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='%231F5C4A'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
-  :root { --ink:#1b1b1b; --muted:#666; --line:#dcdcdc; --good:#1b7f3b; --bad:#a33; --bg:#f7f7f5; }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html, body { margin:0; height:100%; }
+  :root {
+    color-scheme: light dark;
+    --ground:#E9EDEA; --surface:#FFFFFF; --sunken:#F3F6F3; --ink:#16201C; --muted:#5D6C65;
+    --line:#D1D9D4; --line-soft:#E2E8E4;
+    --accent:#1F5C4A; --accent-ink:#FFFFFF; --ghost:#6E837A;
+    --good:#0E5C39; --good-bg:#DCEDE3; --bad:#8E3325; --bad-bg:#F6E3DF;
+    --warn-bg:#FBF0DC; --warn-ink:#6B4F14;
+    /* Diverging gradient scale: both arms validated as ordinal ramps, the
+       cross-midpoint pairs clear the CVD and normal-vision floors. */
+    --dn2:#184f95; --dn1:#5598e7; --flat:#6E736E;
+    --up1:#e8a05a; --up2:#d03b3b; --up3:#8e2f24;
+    /* Reserved instrument hue: the scrub cursor and nothing else. */
+    --cursor:#4a3aa7;
+    --shadow:0 1px 2px rgba(20,35,28,.06), 0 6px 18px rgba(20,35,28,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0E1412; --surface:#171E1B; --sunken:#131A17; --ink:#E4EBE7; --muted:#93A29A;
+      --line:#29332E; --line-soft:#212A26;
+      --accent:#64BC9C; --accent-ink:#0E1412; --ghost:#7E918A;
+      --good:#6FC496; --good-bg:#163023; --bad:#E08A77; --bad-bg:#331C17;
+      --warn-bg:#2E2617; --warn-ink:#E3C583;
+      --dn2:#4A90D9; --dn1:#8FC8E8; --flat:#8A918B; --up1:#EDB36A; --up2:#E07A50; --up3:#C8503A;
+      --cursor:#9085e9;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E1412; --surface:#171E1B; --sunken:#131A17; --ink:#E4EBE7; --muted:#93A29A;
+    --line:#29332E; --line-soft:#212A26;
+    --accent:#64BC9C; --accent-ink:#0E1412; --ghost:#7E918A;
+    --good:#6FC496; --good-bg:#163023; --bad:#E08A77; --bad-bg:#331C17;
+    --warn-bg:#2E2617; --warn-ink:#E3C583;
+    --dn2:#4A90D9; --dn1:#8FC8E8; --flat:#8A918B; --up1:#EDB36A; --up2:#E07A50; --up3:#C8503A;
+    --cursor:#9085e9;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
   body {
-    font:16px/1.45 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
-    color:var(--ink); background:var(--bg);
+    background: var(--ground); color: var(--ink);
+    font: 400 15px/1.5 "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 1120px; margin: 0 auto;
+    padding-inline: 16px;
+    padding-block: calc(16px + env(safe-area-inset-top, 0px)) calc(32px + env(safe-area-inset-bottom, 0px));
+    display: grid; gap: 12px;
   }
 
-  /* Phone first: map on top, controls below, both scrolling as one column. */
-  .layout { display:flex; flex-direction:column; height:100vh; height:100dvh; }
-  #map { flex:0 0 42vh; flex-basis:42dvh; width:100%; }
-  .panel {
-    flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch;
-    background:#fff; border-top:1px solid var(--line);
-    padding:14px 16px calc(20px + env(safe-area-inset-bottom));
+  h1 { font-family: "Bricolage Grotesque", sans-serif; font-size: 23px; font-weight: 700; letter-spacing: -.02em; margin: 0; }
+  h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); margin: 0; }
+  .num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .hint { font-size: 13px; color: var(--muted); }
+
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+  .panel > .body { padding: 13px; display: grid; gap: 11px; }
+  .panel > .head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 13px; border-bottom: 1px solid var(--line-soft);
   }
 
-  h1 { font-size:17px; margin:0 0 2px; }
-  .sub { color:var(--muted); font-size:13px; margin:0 0 14px; }
-  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 12px; padding:12px; }
-  legend { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); padding:0 4px; }
-  label { display:block; font-size:13px; margin-bottom:6px; color:#333; }
+  /* --- query row: one line, never ragged --- */
+  .query { display: flex; align-items: center; gap: 8px; padding: 9px 10px; }
+  .terms-summary {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+    font: inherit; font-size: 14px; min-height: 44px; padding: 0 12px; border-radius: 8px;
+    background: var(--sunken); border: 1px solid var(--line); cursor: pointer; color: inherit;
+    overflow: hidden; white-space: nowrap;
+  }
+  .terms-summary .sep { color: var(--line); }
+  .terms-summary .cue { margin-left: auto; font-size: 12px; color: var(--muted); padding-left: 8px; }
+  .terms-summary:hover { border-color: var(--muted); }
 
-  /* 16px inputs stop iOS Safari zooming in on focus. */
-  input, select, button { font:inherit; font-size:16px; }
-  input[type=number], input[type=password], input[type=text], select {
-    width:100%; padding:11px 10px; border:1px solid var(--line); border-radius:6px; background:#fff;
+  .field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .field-grid label { display: grid; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+  .field { display: flex; gap: 8px; }
+  input, select {
+    font: inherit; font-size: 16px; min-height: 44px; padding: 0 10px; width: 100%; min-width: 0;
+    color: var(--ink); background: var(--sunken); border: 1px solid var(--line); border-radius: 8px;
   }
-  .radios { display:flex; gap:8px; }
-  .radios label {
-    flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
-    margin:0; padding:11px 4px; border:1px solid var(--line); border-radius:6px;
-    font-size:14px; cursor:pointer; background:#fff;
-  }
-  .radios label:has(input:checked) { border-color:var(--ink); background:#f2f2f0; font-weight:600; }
-  .radios input { margin:0; }
+  input::placeholder { color: var(--muted); }
 
   button {
-    width:100%; padding:14px; border:0; border-radius:8px;
-    background:var(--ink); color:#fff; cursor:pointer; font-weight:600;
+    font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    min-height: 44px; padding: 0 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap;
   }
-  button.secondary { background:#fff; color:var(--ink); border:1px solid var(--line); margin-top:8px; font-weight:400; }
-  button.link { width:auto; background:none; color:var(--muted); border:0; padding:0; font-size:13px; text-decoration:underline; font-weight:400; }
-  button[disabled] { opacity:.45; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:hover { border-color: var(--muted); }
+  button.primary:hover { filter: brightness(1.06); }
+  button.small { font-size: 13px; padding: 0 11px; }
+  button[disabled] { opacity: .45; cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
 
-  .note { font-size:12px; color:var(--muted); margin-top:10px; }
-  .msg { padding:10px 12px; border-radius:6px; font-size:13px; margin-bottom:10px; }
-  .msg.error { background:#fdeaea; color:#7b1d1d; }
-  .msg.warn  { background:#fdf5e2; color:#6b4f14; }
-  .msg.info  { background:#eef3fb; color:#243b55; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: inherit; font-size: 13px; min-height: 44px; padding: 0 13px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--sunken); color: var(--ink); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .chip .x { color: currentColor; opacity: .6; font-size: 15px; }
 
+  .results-list { display: grid; gap: 4px; }
+  .result-row {
+    display: flex; justify-content: space-between; gap: 10px; align-items: center;
+    min-height: 44px; padding: 0 10px; border-radius: 8px; background: var(--sunken); cursor: pointer;
+    border: 1px solid transparent; text-align: left; width: 100%; font: inherit; color: inherit;
+  }
+  .result-row:hover { border-color: var(--line); }
+  .result-row .where { font-size: 13px; color: var(--muted); flex: none; }
+  .result-row .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* --- messages --- */
+  .msg { padding: 10px 12px; border-radius: 8px; font-size: 13.5px; }
+  .msg.error { background: var(--bad-bg); color: var(--bad); }
+  .msg.warn  { background: var(--warn-bg); color: var(--warn-ink); }
+  .msg.info  { background: var(--sunken); color: var(--muted); }
+  #messages { display: grid; gap: 8px; }
+  #messages:empty { display: none; }
+
+  /* --- layout --- */
+  .grid { display: grid; gap: 12px; grid-template-columns: 1fr; align-items: start; }
+  @media (min-width: 900px) {
+    .grid { grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); }
+    .span-all { grid-column: 1 / -1; }
+  }
+
+  /* --- map --- */
+  .map-shell { position: relative; }
+  #map { height: 42vh; min-height: 260px; border-radius: 10px 10px 0 0; z-index: 0; }
+  @media (min-width: 900px) { #map { height: 460px; } }
+  .map-legend { position: absolute; left: 10px; bottom: 10px; z-index: 500; display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    font-size: 11px; padding: 4px 8px; border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 90%, transparent);
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .map-foot {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; align-items: center;
+    font-size: 13px; color: var(--muted); padding: 9px 13px; border-top: 1px solid var(--line-soft);
+  }
+  .quota-bar { height: 5px; border-radius: 3px; background: var(--line-soft); overflow: hidden; width: 96px; }
+  .quota-bar i { display: block; height: 100%; background: var(--accent); }
+  .arrow-icon { background: none; border: 0; }
+  .route-hit { pointer-events: stroke; }
+
+  /* --- cards --- */
+  .cards { display: grid; gap: 8px; }
+  .group-heading { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: 6px; }
   .card {
-    border:1px solid var(--line); border-left:4px solid var(--line); border-radius:8px;
-    padding:12px; margin-bottom:10px; background:#fff; cursor:pointer;
+    display: grid; grid-template-columns: 20px 1fr 74px; gap: 9px; align-items: center;
+    width: 100%; text-align: left; padding: 10px 11px; cursor: pointer; min-height: 44px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 9px; color: inherit; font: inherit;
   }
-  .card.selected { border-left-color:var(--ink); background:#fafafa; }
-  .card h3 { margin:0 0 6px; font-size:16px; display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
-  .badge { font-size:11px; padding:3px 8px; border-radius:999px; white-space:nowrap; font-weight:600; }
-  .badge.good { background:#e4f3e9; color:var(--good); }
-  .badge.bad  { background:#fbeaea; color:var(--bad); }
-  .stat { font-size:14px; }
-  .stat span { color:var(--muted); }
-  .err { font-size:12px; color:var(--muted); margin-top:4px; }
-  .group-heading { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:16px 0 8px; }
-  details summary { font-size:13px; color:var(--muted); cursor:pointer; margin-bottom:10px; }
+  .card[aria-current="true"] { border-color: var(--accent); border-width: 2px; padding: 9px 10px; background: var(--sunken); }
+  .card:hover { border-color: var(--muted); }
+  .pick {
+    width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--line);
+    display: grid; place-items: center; font-size: 12px; color: var(--accent-ink);
+  }
+  .card[aria-current="true"] .pick { background: var(--accent); border-color: var(--accent); }
+  .card .title { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+  .card .dist { font-size: 15px; font-weight: 600; }
+  .card .sub { font-size: 13px; margin-top: 1px; }
+  .card .err { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .spark { width: 74px; height: 34px; display: block; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .badge.good { background: var(--good-bg); color: var(--good); }
+  .badge.bad  { background: var(--bad-bg);  color: var(--bad); }
 
-  /* Desktop: map beside the panel. */
-  @media (min-width: 860px) {
-    .layout { flex-direction:row; }
-    #map { flex:1 1 auto; height:100%; }
-    .panel { flex:0 0 400px; width:400px; border-top:0; border-left:1px solid var(--line); padding:18px; }
-  }
+  /* --- detail --- */
+  .summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+  .metric { display: flex; flex-direction: column; gap: 1px; }
+  .metric .v { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  .metric .k { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .metric .d { font-size: 13px; color: var(--muted); }
+  .detail { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+  .detail-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 13px; }
+  .detail-row .k { color: var(--muted); }
+
+  /* --- chart --- */
+  .chart { display: block; width: 100%; touch-action: pan-y; cursor: crosshair; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+  #readout { font-size: 13px; color: var(--muted); min-width: 19ch; text-align: right; }
+  .scale { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+  .scale span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 14px; height: 8px; border-radius: 2px; display: inline-block; }
+
+  .empty { padding: 22px 13px; text-align: center; color: var(--muted); font-size: 14px; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
-<div class="layout">
-  <div id="map"></div>
-  <div class="panel">
-    <h1>S10 route finder</h1>
-    <p class="sub">Tap the map to set your start. Routes are generated, measured and ranked against your targets.</p>
+<div class="wrap">
+  <h1>S10 route finder</h1>
 
-    <div id="messages"></div>
-
-    <details id="settings">
-      <summary>Settings: OpenRouteService key</summary>
-      <fieldset>
-        <legend>Your key</legend>
-        <label for="api-key">Stored in this browser only. It is never sent anywhere except OpenRouteService.</label>
-        <input type="password" id="api-key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
-        <button id="save-key" class="secondary">Save key</button>
-        <div class="note">
-          Free key from openrouteservice.org/dev/#/signup.
-          <span id="terrain-note"></span>
-          <button id="clear-terrain" class="link">Clear terrain store</button>
+  <section class="panel">
+    <div class="query">
+      <button class="terms-summary" type="button" id="editSearch" aria-expanded="false" aria-controls="searchPanel">
+        <span id="sumStart">Default start</span><span class="sep">/</span>
+        <span class="num" id="sumDistance">5 km</span><span class="sep">/</span>
+        <span class="num" id="sumClimb">Medium</span><span class="sep">/</span>
+        <span id="sumShape">Loop</span>
+        <span class="cue" id="editCue">Edit</span>
+      </button>
+      <button class="primary" type="button" id="searchBtn">Search</button>
+    </div>
+    <div id="searchPanel" hidden>
+      <div class="body" style="border-top:1px solid var(--line-soft)">
+        <div class="field-grid">
+          <label>Distance km
+            <input type="text" id="distance" inputmode="decimal" value="5" aria-label="Distance in km">
+          </label>
+          <label>Climb
+            <select id="climbPreset" aria-label="Climb preset"></select>
+          </label>
+          <label>Shape
+            <select id="shape" aria-label="Route shape">
+              <option value="loop">Loop</option>
+              <option value="out_and_back">Out and back</option>
+            </select>
+          </label>
         </div>
-      </fieldset>
-    </details>
+        <div class="field">
+          <input type="text" id="climbExact" inputmode="numeric" placeholder="Or exact metres of ascent" aria-label="Exact metres of ascent">
+        </div>
 
-    <fieldset>
-      <legend>Start</legend>
-      <div class="stat" id="start-readout">&mdash;</div>
-    </fieldset>
+        <div class="field">
+          <input type="search" id="placeSearch" placeholder="Start: search a place or postcode"
+                 autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search for a start place">
+          <button type="button" class="primary" id="locateBtn" title="Use my current location">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.2"/><path d="M12 2v3.4M12 18.6V22M22 12h-3.4M5.4 12H2"/>
+            </svg>
+            Locate
+          </button>
+        </div>
+        <div class="results-list" id="searchResults" hidden></div>
+        <div class="chips" id="savedStarts"></div>
 
-    <fieldset>
-      <legend>Route</legend>
-      <label for="distance">Distance (km)</label>
-      <input type="number" id="distance" value="5" min="1" max="30" step="0.5" inputmode="decimal">
+        <div class="field">
+          <input type="text" id="pace" inputmode="decimal" placeholder="Flat pace, e.g. 5:40" aria-label="Average flat pace in minutes per km">
+          <button type="button" class="small" id="clearPace">Clear</button>
+        </div>
+        <p class="hint" style="margin:0">Leave pace blank and no times are shown anywhere.</p>
+      </div>
+    </div>
+  </section>
 
-      <label style="margin-top:12px">Climb</label>
-      <div class="radios" id="climb-presets"></div>
-      <label style="margin-top:10px" for="climb-m">or exact metres of ascent</label>
-      <input type="number" id="climb-m" min="0" step="10" inputmode="numeric" placeholder="blank to use the preset above">
+  <div id="messages"></div>
 
-      <label style="margin-top:12px" for="shape">Shape</label>
-      <select id="shape">
-        <option value="loop">Loop</option>
-        <option value="out_and_back">Out and back</option>
-      </select>
-    </fieldset>
+  <div class="grid">
+    <section class="panel">
+      <div class="map-shell">
+        <div id="map"></div>
+        <div class="map-legend">
+          <span class="pill" id="startPill">Start</span>
+          <span class="pill" id="dirPill" hidden>Clockwise</span>
+        </div>
+      </div>
+      <div class="map-foot">
+        <span id="budgetText">Tap the map to set your start</span>
+        <div class="quota-bar" aria-hidden="true"><i id="quotaFill" style="width:0"></i></div>
+        <span id="quotaText"></span>
+      </div>
+    </section>
 
-    <button id="search">Search</button>
-    <button id="search-again" class="secondary" disabled>Search again (fresh seeds, new budget)</button>
-    <div class="note" id="budget-note"></div>
+    <section class="panel">
+      <div class="head">
+        <h2 id="resultsHeading">Results</h2>
+        <button class="small" type="button" id="terrainBtn" aria-pressed="false">Show terrain samples</button>
+      </div>
+      <div class="body">
+        <div class="cards" id="cards"></div>
+        <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
+        <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
+      </div>
+    </section>
 
-    <div id="results"></div>
+    <section class="panel span-all" id="detailPanel" hidden>
+      <div class="head">
+        <h2 id="detailTitle">Selected route</h2>
+        <button type="button" id="reverseBtn" aria-pressed="false">Reverse direction</button>
+      </div>
+      <div class="body">
+        <div class="summary">
+          <div class="metric">
+            <span class="v num" id="mDist">&mdash;</span>
+            <span class="k">distance</span>
+            <span class="d" id="mDistErr">&mdash;</span>
+          </div>
+          <div class="metric">
+            <span class="v num" id="mClimb">&mdash;</span>
+            <span class="k">climb</span>
+            <span class="d" id="mClimbErr">&mdash;</span>
+          </div>
+          <div class="metric" id="timeMetric" hidden>
+            <span class="v num" id="mTime">&mdash;</span>
+            <span class="k">estimated time</span>
+            <span class="d" id="mTimeNote">&mdash;</span>
+          </div>
+          <span class="badge bad" id="mBadge" style="margin-left:auto">&mdash;</span>
+        </div>
+
+        <div class="detail">
+          <div class="detail-row"><span class="k">Longest sustained climb</span><span class="num" id="dLongest">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Steepest 200 m</span><span class="num" id="dSteepest">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Highest point</span><span class="num" id="dHigh">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Total descent</span><span class="num" id="dDrop">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Found by</span><span id="dStrategy">&mdash;</span></div>
+        </div>
+
+        <div class="chart-head">
+          <h2>Elevation</h2>
+          <span id="readout">Drag across the chart</span>
+        </div>
+        <svg class="chart" id="chart" role="img" aria-label="Elevation profile of the selected route with a gradient ribbon beneath it"></svg>
+        <div class="scale">
+          <span><i class="swatch" style="background:var(--dn2)"></i> down &gt;6%</span>
+          <span><i class="swatch" style="background:var(--dn1)"></i> down 3&ndash;6%</span>
+          <span><i class="swatch" style="background:var(--flat)"></i> flat</span>
+          <span><i class="swatch" style="background:var(--up1)"></i> up 3&ndash;6%</span>
+          <span><i class="swatch" style="background:var(--up2)"></i> up 6&ndash;10%</span>
+          <span><i class="swatch" style="background:var(--up3)"></i> up &gt;10%</span>
+        </div>
+        <p class="hint" style="margin:0" id="chartNote"></p>
+      </div>
+    </section>
   </div>
+
+  <section class="panel">
+    <div class="head">
+      <h2>Settings</h2>
+      <span class="hint" id="terrainCount"></span>
+    </div>
+    <div class="body">
+      <label class="hint" for="apiKey">OpenRouteService key. Stored in this browser only, and only ever sent to OpenRouteService.</label>
+      <div class="field">
+        <input type="password" id="apiKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
+        <button type="button" class="primary" id="saveKey">Save</button>
+      </div>
+      <div class="chips">
+        <button class="chip" type="button" id="clearTerrain">Clear terrain store</button>
+      </div>
+      <p class="hint" style="margin:0">
+        Free key from <a href="https://openrouteservice.org/dev/#/signup" rel="noopener">openrouteservice.org</a>.
+        Routing and elevation by openrouteservice, map data &copy; OpenStreetMap contributors.
+      </p>
+    </div>
+  </section>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
