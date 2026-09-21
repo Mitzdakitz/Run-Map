@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK } from '../web/config.js';
 import {
   BudgetExhausted, Candidate, OrsClient, RateLimitError, TerrainStore,
-  ascentDescent, haversineM, makeRng, parseRoute, rank, search,
+  ascentDescent, haversineM, makeRng, parseRoute, rank, recentRequestCount,
+  resetRateLimit, search,
 } from '../web/routefinder.js';
 
 const START = { lat: 53.3736, lon: -1.5040 };
@@ -433,4 +434,80 @@ test('an ascent error re-aims rather than rescaling', async () => {
     const expected = CONFIG.OUT_AND_BACK_FACTOR * 8000;
     assert.ok(Math.abs(d - expected) / expected < 0.02, 'length unchanged, terrain changed');
   }
+});
+
+// --- shared rate limiting --------------------------------------------------
+/* A new client is made for each search. The per minute limit is a sliding
+ * window on the service's side, so the throttle has to span them: when it lived
+ * on the client, two searches in a row could put more than the limit into one
+ * window, and the refusal that follows is indistinguishable from being offline. */
+function clockedClient(clock, sleeps, budget = 100) {
+  return new OrsClient({
+    apiKey: 'test-key',
+    budget,
+    now: () => clock.t,
+    sleepImpl: async (ms) => { sleeps.push(ms); clock.t += ms; },
+    fetchImpl: async () => ({
+      status: 200, headers: { get: () => null }, json: async () => fakeRoute(5000, 300),
+    }),
+  });
+}
+
+test('the minimum gap between requests is kept across separate clients', async () => {
+  resetRateLimit();
+  const clock = { t: 1_000_000 };
+  const sleeps = [];
+
+  const first = clockedClient(clock, sleeps);
+  await first.directions([[-1.5, 53.37]], { length: 1000 });
+  await first.directions([[-1.5, 53.37]], { length: 1001 });
+
+  // A second search builds a brand new client, as the app does.
+  const second = clockedClient(clock, sleeps);
+  await second.directions([[-1.5, 53.37]], { length: 2000 });
+
+  assert.equal(recentRequestCount(), 3, 'the window counts requests from both clients');
+  assert.equal(sleeps.length, 2, 'the new client still waited its turn');
+  sleeps.forEach((ms) => assert.ok(ms >= 1, `waited ${ms}ms`));
+});
+
+test('no sixty second window ever holds more requests than the limit allows', async () => {
+  resetRateLimit();
+  const clock = { t: 5_000_000 };
+  const sleeps = [];
+  const sent = [];
+  const client = new OrsClient({
+    apiKey: 'test-key',
+    budget: 500,
+    now: () => clock.t,
+    sleepImpl: async (ms) => { sleeps.push(ms); clock.t += ms; },
+    fetchImpl: async () => {
+      sent.push(clock.t);
+      return { status: 200, headers: { get: () => null }, json: async () => fakeRoute(5000, 300) };
+    },
+  });
+
+  const limit = CONFIG.ORS_RATE_LIMIT_PER_MINUTE;
+  // Three searches back to back, which is what breached the limit before.
+  for (let i = 0; i < limit * 2; i += 1) {
+    await client.directions([[-1.5, 53.37]], { length: 3000 + i });
+  }
+
+  // Slide a real sixty second window over every request that was sent.
+  let worst = 0;
+  sent.forEach((from) => {
+    const inWindow = sent.filter((t) => t >= from && t < from + 60000).length;
+    worst = Math.max(worst, inWindow);
+  });
+  assert.ok(worst <= limit,
+    `a sixty second window held ${worst} requests, and the limit is ${limit}`);
+  assert.equal(sent.length, limit * 2, 'every request was still sent, just spaced out');
+});
+
+test('the first request of a session is not made to wait', async () => {
+  resetRateLimit();
+  const clock = { t: 9_000_000 };
+  const sleeps = [];
+  await clockedClient(clock, sleeps).directions([[-1.5, 53.37]], { length: 4242 });
+  assert.equal(sleeps.length, 0);
 });
