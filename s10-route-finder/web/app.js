@@ -782,10 +782,17 @@ function selectRoute(gi, ri, { fit = false } = {}) {
 // --- map -------------------------------------------------------------------
 function drawRoutes(fit) {
   if (!map) return;
+  /* Everything this layer owns goes, not only the lines. The arrows, the
+   * turnaround marker and the chart's cursor are drawn below the early return,
+   * so when the display emptied they were never cleared and stayed on the map
+   * pointing along a route that was no longer there. */
   routeLayer.lines.forEach((l) => map.removeLayer(l));
   routeLayer.hits.forEach((l) => map.removeLayer(l));
   routeLayer.lines = [];
   routeLayer.hits = [];
+  if (routeLayer.arrows) { map.removeLayer(routeLayer.arrows); routeLayer.arrows = null; }
+  if (routeLayer.turn) { map.removeLayer(routeLayer.turn); routeLayer.turn = null; }
+  if (routeLayer.cursor) { map.removeLayer(routeLayer.cursor); routeLayer.cursor = null; }
 
   const group = groups[selected.group];
   if (!group) return;
