@@ -134,6 +134,9 @@
   .result-row .where { font-size: 13px; color: var(--muted); flex: none; }
   .result-row .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  .key-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .key-row .hint { flex: 1; min-width: 12ch; }
+
   /* --- loading runner --- */
   .loading { display: flex; align-items: center; gap: 12px; }
   .runner { width: 34px; height: 34px; flex: none; color: var(--accent); }
@@ -376,10 +379,17 @@
       <span class="hint" id="terrainCount"></span>
     </div>
     <div class="body">
-      <label class="hint" for="apiKey">OpenRouteService key. Stored in this browser only, and only ever sent to OpenRouteService.</label>
-      <div class="field">
-        <input type="password" id="apiKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
-        <button type="button" class="primary" id="saveKey">Save</button>
+      <div id="keySaved" class="key-row" hidden>
+        <span class="hint">An OpenRouteService key is saved in this browser.</span>
+        <button type="button" class="small" id="changeKey">Change</button>
+        <button type="button" class="small" id="removeKey">Remove</button>
+      </div>
+      <div id="keyEntry">
+        <label class="hint" for="apiKey">OpenRouteService key. Stored in this browser only, and only ever sent to OpenRouteService.</label>
+        <div class="field" style="margin-top:6px">
+          <input type="password" id="apiKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
+          <button type="button" class="primary" id="saveKey">Save</button>
+        </div>
       </div>
       <div class="chips">
         <button class="chip" type="button" id="clearTerrain">Clear terrain store</button>
