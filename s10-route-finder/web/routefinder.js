@@ -235,6 +235,36 @@ export class BudgetExhausted extends OrsError {}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/* The per minute limit is a sliding 60 second window on ORS's side, so the
+ * throttle has to be shared by every client this page makes. It used to live on
+ * the client instance, and a new client is made for each search, which meant two
+ * searches in quick succession could put more than the limit into one window.
+ * The refusal that follows arrives without CORS headers, so the browser reports
+ * it as an ordinary network failure and the real cause is invisible. */
+const rateLimit = {
+  recent: [],
+  reset() { this.recent = []; },
+  async take(now, pause) {
+    const windowMs = 60000;
+    const ceiling = Math.max(1, CONFIG.ORS_RATE_LIMIT_PER_MINUTE - 2);
+    this.recent = this.recent.filter((t) => now() - t < windowMs);
+    if (this.recent.length >= ceiling) {
+      const waitMs = windowMs - (now() - this.recent[0]) + 50;
+      if (waitMs > 0) await pause(waitMs);
+      this.recent = this.recent.filter((t) => now() - t < windowMs);
+    }
+    if (this.recent.length) {
+      const gap = CONFIG.ORS_MIN_REQUEST_INTERVAL_MS - (now() - this.recent[this.recent.length - 1]);
+      if (gap > 0) await pause(gap);
+    }
+    this.recent.push(now());
+  },
+};
+
+/* Tests need a clean window; nothing else should call this. */
+export function resetRateLimit() { rateLimit.reset(); }
+export function recentRequestCount() { return rateLimit.recent.length; }
+
 export class OrsClient {
   constructor({ apiKey, budget = CONFIG.REQUEST_BUDGET, profile = CONFIG.ORS_PROFILE,
                 fetchImpl = null, sleepImpl = sleep, now = () => Date.now() } = {}) {
@@ -248,7 +278,6 @@ export class OrsClient {
     this.cacheHits = 0;
     this.quota = {};
     this.cache = new Map();      // this session only: route geometries are large
-    this.lastRequestAt = 0;
   }
 
   get remaining() { return Math.max(0, this.budget - this.requestsUsed); }
@@ -271,8 +300,7 @@ export class OrsClient {
       throw new OrsError('No OpenRouteService API key set. Add one in Settings.');
     }
 
-    const wait = CONFIG.ORS_MIN_REQUEST_INTERVAL_MS - (this.now() - this.lastRequestAt);
-    if (wait > 0) await this.sleep(wait);
+    await rateLimit.take(this.now, this.sleep);
 
     this.requestsUsed += 1;
     let response;
@@ -290,11 +318,18 @@ export class OrsClient {
         },
       );
     } catch (err) {
+      /* A fetch that never completes hides its reason. It is not always the
+       * connection: an error response from ORS carries no CORS headers, so a
+       * rate limit, an exhausted quota or a refused key all reach the browser
+       * looking exactly like being offline. Say so rather than guess. */
       throw new OrsError(
-        `Could not reach OpenRouteService: ${err.message}. Check your connection.`,
+        'Could not reach OpenRouteService, and the browser will not say why. '
+        + 'The usual causes are a dropped connection, the per minute or daily '
+        + 'limit being reached, or a key that was refused. A refusal arrives '
+        + 'without the headers a browser needs, which makes it look identical '
+        + 'to being offline. Check your usage on your openrouteservice.org '
+        + 'dashboard.',
       );
-    } finally {
-      this.lastRequestAt = this.now();
     }
 
     for (const name of ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset']) {

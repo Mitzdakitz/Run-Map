@@ -436,7 +436,13 @@ function handleResult(result, target, client, stored) {
   refreshTerrainCount();
 
   if (result.stoppedEarly) message('error', result.stoppedEarly);
-  result.warnings.forEach((w) => message('warn', w));
+
+  // The same failure repeated once per request is noise, so show it once.
+  const counts = new Map();
+  result.warnings.forEach((w) => counts.set(w, (counts.get(w) || 0) + 1));
+  counts.forEach((count, text) => {
+    message('warn', count > 1 ? `${text} (${count} times)` : text);
+  });
   if (!stored) {
     message('warn', 'The terrain store could not be saved in this browser, so it will not carry over '
       + 'to your next visit. This happens in Private Browsing or when storage is full.');
@@ -449,7 +455,13 @@ function handleResult(result, target, client, stored) {
   $('quotaText').textContent = left ? `${left} left in this quota window` : '';
 
   if (!result.candidates.length) {
-    message('warn', 'No routes came back. Try a different start point or distance.');
+    const allUnreachable = result.warnings.length
+      && result.warnings.every((w) => w.startsWith('Could not reach OpenRouteService'));
+    message('warn', allUnreachable
+      ? 'Every request failed before it reached OpenRouteService, so this is not about '
+        + 'your start point or distance. Check the reason above, wait a minute if you have '
+        + 'been searching repeatedly, then try again.'
+      : 'No routes came back. Try a different start point or distance.');
     return;
   }
 
