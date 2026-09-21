@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-22.5';
+export const APP_VERSION = '2026-09-22.6';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -113,6 +113,7 @@ export const STORAGE = {
   starts: 's10.savedStarts',
   startName: 's10.startName',
   routes: 's10.savedRoutes',
+  plotLock: 's10.plotLock',
 };
 
 export const SHAPE_LOOP = 'loop';

@@ -71,6 +71,10 @@ const plot = {
    * told from a deliberate move. */
   panFrom: null,
   again: false,
+  /* Placing turned off, so the map can be looked around without leaving points
+   * behind. Remembered between visits: it is how someone likes to work, not a
+   * transient state. */
+  locked: false,
 };
 let rerouteTimer = null;
 let library = null;
@@ -210,7 +214,7 @@ function initMap() {
   });
   map.on('click', (e) => {
     if (plot.active) {
-      if (Date.now() < plot.ignoreClicksUntil) return;
+      if (plot.locked || Date.now() < plot.ignoreClicksUntil) return;
       addPlotPoint(e.latlng.lat, e.latlng.lng);
       return;
     }
@@ -220,9 +224,11 @@ function initMap() {
   /* Aim with the crosshair: drag the ground under it and let go. Only a real
    * pan counts. A zoom is not a pan, and neither is a wobble on the way to a
    * tap, and either dropping a point would cost a routing request to undo. */
-  map.on('dragstart', () => { plot.panFrom = plot.active ? map.getCenter() : null; });
+  map.on('dragstart', () => {
+    plot.panFrom = plot.active && !plot.locked ? map.getCenter() : null;
+  });
   map.on('dragend', () => {
-    if (!plot.active || !plot.panFrom) return;
+    if (!plot.active || plot.locked || !plot.panFrom) return;
     const from = plot.panFrom;
     plot.panFrom = null;
     const zoom = map.getZoom();
@@ -248,6 +254,7 @@ function buildClimbPresets() {
 
 function loadSettings() {
   apiKey = read(STORAGE.key, '');
+  plot.locked = Boolean(read(STORAGE.plotLock, ''));
   renderKeyState();
   const pace = read(STORAGE.pace, '');
   $('pace').value = pace;
@@ -1262,11 +1269,39 @@ function pushHistory() {
   if (plot.history.length > 30) plot.history.shift();
 }
 
+/* Shown three ways, because a mode inside a mode is the easiest thing in an
+ * interface to lose track of: the button says which state it is in, the
+ * crosshair fades, and a padlock appears inside it. */
+function renderPlotLock() {
+  const off = plot.locked;
+  $('plotLock').setAttribute('aria-pressed', String(off));
+  $('plotLockText').textContent = off ? 'Placing off' : 'Placing on';
+  $('plotLock').title = off
+    ? 'Panning will not place points. Tap to start placing again.'
+    : 'Letting go of a pan places a point. Tap to stop that.';
+  $('crosshair').classList.toggle('locked', off);
+}
+
+function setPlotLock(off) {
+  plot.locked = off;
+  write(STORAGE.plotLock, off ? '1' : '');
+  renderPlotLock();
+  renderPlotStats();
+}
+
 function plotStatus(text) { $('plotStats').textContent = text; }
 
 function renderPlotStats() {
   const n = plot.waypoints.length;
-  if (!n) { plotStatus('Tap the map to place your first point.'); return; }
+  if (plot.locked && !plot.busy && !rerouteTimer) {
+    const so_far = n >= 2 && plot.route
+      ? `${(plot.route.distanceM / 1000).toFixed(2)} km so far. `
+      : '';
+    plotStatus(`${so_far}Placing is off, so pan and zoom freely. `
+      + 'The padlock turns it back on.');
+    return;
+  }
+  if (!n) { plotStatus('Drag the map so the crosshair is where you want to start, then let go.'); return; }
   if (n < 2) { plotStatus('One point placed. Tap again to make a route.'); return; }
   if (plot.busy) { plotStatus(`Working out the route through ${n} points\u2026`); return; }
   if (rerouteTimer) { plotStatus(`${n} points placed\u2026`); return; }
@@ -1371,6 +1406,8 @@ function setPlotMode(on) {
   if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
   $('plotBar').hidden = !on;
   $('crosshair').hidden = !on;
+  $('plotLock').hidden = !on;
+  renderPlotLock();
   if (startMarker) {
     if (on) map.removeLayer(startMarker);
     else startMarker.addTo(map);
@@ -1672,6 +1709,7 @@ function wireEvents() {
     this.setAttribute('aria-pressed', String(plot.closeLoop));
     scheduleReroute();
   });
+  $('plotLock').addEventListener('click', () => setPlotLock(!plot.locked));
   $('saveRouteBtn').addEventListener('click', saveCurrentRoute);
   $('routeName').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') saveCurrentRoute();
