@@ -287,9 +287,12 @@ async function runDiagnosis() {
 }
 
 // --- start point -----------------------------------------------------------
-function insideBbox(lat, lon) {
-  const b = CONFIG.BBOX;
-  return lat >= b.minLat && lat <= b.maxLat && lon >= b.minLon && lon <= b.maxLon;
+/* The app used to refuse any start outside a Sheffield bounding box. Routes can
+ * now be plotted anywhere routing data exists, so the only thing worth checking
+ * is that the numbers are numbers. */
+function usableStart(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon)
+    && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 }
 
 function setStart(lat, lon, name, { silent = false } = {}) {
@@ -297,11 +300,11 @@ function setStart(lat, lon, name, { silent = false } = {}) {
   if (startMarker) startMarker.setLatLng([lat, lon]);
   $('startPill').textContent = `Start: ${start.name}`;
   $('sumStart').textContent = start.name;
-  const ok = insideBbox(lat, lon);
+  const ok = usableStart(lat, lon);
   $('searchBtn').disabled = !ok || busy;
   if (!ok && !silent) {
     clearMessages();
-    message('error', 'That start is outside the Sheffield area this app covers. Pick somewhere closer to S10.');
+    message('error', 'That start point is not a real position.');
   }
   write(STORAGE.startName, start.name);
 }
@@ -452,7 +455,7 @@ function showLoading(text) {
 // --- search ----------------------------------------------------------------
 function setBusy(state) {
   busy = state;
-  $('searchBtn').disabled = state || !insideBbox(start.lat, start.lon);
+  $('searchBtn').disabled = state || !usableStart(start.lat, start.lon);
   $('searchBtn').textContent = state ? 'Searching…' : 'Search';
 }
 
@@ -992,7 +995,10 @@ function onPlaceInput(value) {
   if (value.trim().length < 2) { results.hidden = true; results.textContent = ''; return; }
   geocodeTimer = setTimeout(async () => {
     try {
-      const hits = await geocode(value, apiKey);
+      const centre = map ? map.getCenter() : null;
+      const hits = await geocode(value, apiKey, {
+        focus: centre ? { lat: centre.lat, lon: centre.lng } : start,
+      });
       results.textContent = '';
       results.hidden = hits.length === 0;
       hits.forEach((hit) => {
@@ -1001,10 +1007,6 @@ function onPlaceInput(value) {
         row.type = 'button';
         row.innerHTML = `<span class="what">${hit.label}</span><span class="where">${hit.locality}</span>`;
         row.addEventListener('click', () => {
-          if (!insideBbox(hit.lat, hit.lon)) {
-            message('error', `${hit.label} is outside the Sheffield area this app covers.`);
-            return;
-          }
           setStart(hit.lat, hit.lon, hit.label.split(',')[0]);
           if (map) map.setView([hit.lat, hit.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
           results.hidden = true;
@@ -1030,10 +1032,6 @@ function locateMe() {
     (pos) => {
       $('locateBtn').disabled = false;
       const { latitude, longitude } = pos.coords;
-      if (!insideBbox(latitude, longitude)) {
-        message('error', 'You are outside the Sheffield area this app covers.');
-        return;
-      }
       setStart(latitude, longitude, 'My location');
       if (map) map.setView([latitude, longitude], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
       updateSummary();

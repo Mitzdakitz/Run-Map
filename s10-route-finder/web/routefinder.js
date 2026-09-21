@@ -11,7 +11,14 @@ import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK } from './config.js';
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 111320;
-const M_PER_DEG_LON = 111320 * Math.cos((CONFIG.DEFAULT_START.lat * Math.PI) / 180);
+/* A degree of longitude shrinks towards the poles: 111 km at the equator, 66 km
+ * at Sheffield, 61 km in the far north of Scotland. This used to be a constant
+ * fixed at Sheffield's latitude, which was fine while the app covered one city
+ * and quietly wrong everywhere else. Each grid row knows its own latitude
+ * instead, so cells stay roughly square wherever a route is plotted. */
+function mPerDegLon(lat) {
+  return Math.max(1, M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180));
+}
 
 // --- geometry --------------------------------------------------------------
 export function haversineM(lat1, lon1, lat2, lon2) {
@@ -96,6 +103,7 @@ export function ascentDescentFromCoords(coords) {
  * Only the elevation is stored: the grid cell key encodes the position, which
  * keeps the whole store small enough for a phone's local storage. */
 const TERRAIN_KEY = 's10.terrain.v1';
+const TERRAIN_VERSION = 2;
 
 export class TerrainStore {
   constructor({ storage = null, gridM = CONFIG.TERRAIN_GRID_M } = {}) {
@@ -115,7 +123,9 @@ export class TerrainStore {
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw);
-      if (parsed.gridM !== this.gridM) return;   // old keys mean something else
+      // Old keys mean something else: the grid changed, or the keys predate the
+      // latitude-aware columns and would decode to the wrong place.
+      if (parsed.gridM !== this.gridM || parsed.version !== TERRAIN_VERSION) return;
       this.cells = new Map(Object.entries(parsed.cells || {}));
       this.decoded = [];
     } catch { /* a corrupt store is simply an empty one */ }
@@ -123,7 +133,9 @@ export class TerrainStore {
 
   save() {
     if (!this.storage || !this.dirty) return true;
-    const payload = JSON.stringify({ gridM: this.gridM, cells: Object.fromEntries(this.cells) });
+    const payload = JSON.stringify({
+      version: TERRAIN_VERSION, gridM: this.gridM, cells: Object.fromEntries(this.cells),
+    });
     try {
       this.storage.setItem(TERRAIN_KEY, payload);
       this.dirty = false;
@@ -142,18 +154,21 @@ export class TerrainStore {
 
   get size() { return this.cells.size; }
 
+  rowOf(lat) { return Math.round((lat * M_PER_DEG_LAT) / this.gridM); }
+
+  latOfRow(row) { return (row * this.gridM) / M_PER_DEG_LAT; }
+
+  colOf(lon, rowLat) { return Math.round((lon * mPerDegLon(rowLat)) / this.gridM); }
+
   key(lat, lon) {
-    const row = Math.round((lat * M_PER_DEG_LAT) / this.gridM);
-    const col = Math.round((lon * M_PER_DEG_LON) / this.gridM);
-    return `${row},${col}`;
+    const row = this.rowOf(lat);
+    return `${row},${this.colOf(lon, this.latOfRow(row))}`;
   }
 
-  static decodeKey(key, gridM) {
+  decodeKey(key) {
     const [row, col] = key.split(',').map(Number);
-    return {
-      lat: (row * gridM) / M_PER_DEG_LAT,
-      lon: (col * gridM) / M_PER_DEG_LON,
-    };
+    const lat = this.latOfRow(row);
+    return { lat, lon: (col * this.gridM) / mPerDegLon(lat) };
   }
 
   /* coords are ORS [lon, lat, elevation] triples. Returns cells added. */
@@ -161,32 +176,61 @@ export class TerrainStore {
     let added = 0;
     for (const c of coords) {
       if (c.length < 3 || c[2] === null || c[2] === undefined) continue;
-      if (this.cells.size >= CONFIG.MAX_TERRAIN_POINTS) { this.capped = true; break; }
       const key = this.key(c[1], c[0]);
-      if (!this.cells.has(key)) { this.cells.set(key, Math.round(c[2])); added += 1; }
+      if (this.cells.has(key)) continue;
+      if (this.cells.size >= CONFIG.MAX_TERRAIN_POINTS) {
+        /* Full. Drop the oldest cells rather than refuse the new one. Refusing
+         * meant the store kept whichever area was seen first and never learned
+         * another, which is no use once routes are plotted anywhere. */
+        this.evictOldest(Math.ceil(CONFIG.MAX_TERRAIN_POINTS * CONFIG.TERRAIN_EVICT_FRACTION));
+        this.capped = true;
+      }
+      this.cells.set(key, Math.round(c[2]));
+      added += 1;
     }
     if (added) { this.dirty = true; this.decoded = []; }
     return added;
+  }
+
+  /* Map keeps insertion order, so the front of it is the least recently seen. */
+  evictOldest(count) {
+    const keys = this.cells.keys();
+    for (let i = 0; i < count; i += 1) {
+      const next = keys.next();
+      if (next.done) break;
+      this.cells.delete(next.value);
+    }
+    this.decoded = [];
+    this.dirty = true;
   }
 
   points() {
     if (this.decoded.length !== this.cells.size) {
       this.decoded = [];
       for (const [key, ele] of this.cells) {
-        const { lat, lon } = TerrainStore.decodeKey(key, this.gridM);
+        const { lat, lon } = this.decodeKey(key);
         this.decoded.push([lat, lon, ele]);
       }
     }
     return this.decoded;
   }
 
+  /* Looks up the grid cells that could be in range instead of walking every
+   * cell held. The old scan was linear in the size of the whole store, which
+   * was tolerable for one city and is not once the store spans the country. */
   within(lat, lon, radiusM) {
-    const dlat = radiusM / M_PER_DEG_LAT;
-    const dlon = radiusM / M_PER_DEG_LON;
     const out = [];
-    for (const p of this.points()) {
-      if (p[0] >= lat - dlat && p[0] <= lat + dlat && p[1] >= lon - dlon && p[1] <= lon + dlon) {
-        if (haversineM(lat, lon, p[0], p[1]) <= radiusM) out.push(p);
+    const span = Math.ceil(radiusM / this.gridM) + 1;
+    const centreRow = this.rowOf(lat);
+    for (let row = centreRow - span; row <= centreRow + span; row += 1) {
+      const rowLat = this.latOfRow(row);
+      const perDeg = mPerDegLon(rowLat);
+      const centreCol = this.colOf(lon, rowLat);
+      for (let col = centreCol - span; col <= centreCol + span; col += 1) {
+        const ele = this.cells.get(`${row},${col}`);
+        if (ele === undefined) continue;
+        const cellLon = (col * this.gridM) / perDeg;
+        if (haversineM(lat, lon, rowLat, cellLon) <= radiusM) out.push([rowLat, cellLon, ele]);
       }
     }
     return out;
@@ -832,21 +876,24 @@ export function formatDuration(seconds) {
 }
 
 // --- geocoding -------------------------------------------------------------
-/* Place search, constrained to the Sheffield bounding box so you get Crookes in
- * S10 rather than Crookes in Queensland. This is a separate ORS endpoint with
- * its own quota, so it never spends the routing budget. */
-export async function geocode(text, apiKey, fetchImpl = null) {
+/* Place search. This used to be hard bounded to a Sheffield rectangle, which
+ * kept Crookes in S10 ahead of Crookes in Queensland but also made anywhere
+ * else unreachable. It now biases towards wherever the map is looking rather
+ * than excluding everywhere else, so near things still win without the rest of
+ * the world being off limits. Separate ORS endpoint with its own quota, so it
+ * never spends the routing budget. */
+export async function geocode(text, apiKey, { focus = null, fetchImpl = null } = {}) {
   const query = String(text || '').trim();
   if (query.length < 2) return [];
   if (!apiKey) throw new OrsError('No OpenRouteService API key set. Add one in Settings.');
 
-  const b = CONFIG.BBOX;
+  const near = focus && Number.isFinite(focus.lat) && Number.isFinite(focus.lon)
+    ? focus
+    : CONFIG.DEFAULT_START;
   const url = `${CONFIG.ORS_BASE_URL}/geocode/search`
     + `?api_key=${encodeURIComponent(apiKey)}`
     + `&text=${encodeURIComponent(query)}`
-    + `&boundary.rect.min_lon=${b.minLon}&boundary.rect.min_lat=${b.minLat}`
-    + `&boundary.rect.max_lon=${b.maxLon}&boundary.rect.max_lat=${b.maxLat}`
-    + `&focus.point.lon=${CONFIG.DEFAULT_START.lon}&focus.point.lat=${CONFIG.DEFAULT_START.lat}`
+    + `&focus.point.lon=${near.lon}&focus.point.lat=${near.lat}`
     + `&size=${CONFIG.GEOCODE_RESULTS}`;
 
   const doFetch = fetchImpl || ((...args) => globalThis.fetch(...args));

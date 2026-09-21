@@ -25,7 +25,6 @@ export const CONFIG = {
   // --- Start point and bounds --------------------------------------------
   DEFAULT_START: { lat: 53.3736, lon: -1.5040 },   // Broomhill / Crookes, S10
   DEFAULT_ZOOM: 14,
-  BBOX: { minLat: 53.28, maxLat: 53.47, minLon: -1.78, maxLon: -1.35 },
 
   // --- Inputs -------------------------------------------------------------
   MIN_DISTANCE_KM: 1,
@@ -71,6 +70,7 @@ export const CONFIG = {
   // A phone's local storage is about 5 MB. Each cell costs roughly 20 bytes,
   // so this cap leaves plenty of room and still covers a whole city.
   MAX_TERRAIN_POINTS: 150000,
+  TERRAIN_EVICT_FRACTION: 0.2,   // how much of a full store to drop to make room
 };
 
 // Browser storage keys.

@@ -190,21 +190,33 @@ function geocodeStub(features, status = 200) {
   return { calls, fetchImpl };
 }
 
-test('place search is constrained to the Sheffield bounding box', async () => {
+test('place search leans towards where the map is looking, without excluding elsewhere', async () => {
   const { calls, fetchImpl } = geocodeStub([]);
-  await geocode('crookes', 'test-key', fetchImpl);
+  await geocode('crookes', 'test-key', { fetchImpl, focus: { lat: 51.4545, lon: -2.5879 } });
   const url = calls[0];
-  assert.ok(url.includes(`boundary.rect.min_lat=${CONFIG.BBOX.minLat}`));
-  assert.ok(url.includes(`boundary.rect.max_lon=${CONFIG.BBOX.maxLon}`));
-  assert.ok(url.includes('focus.point.lat='), 'results are biased towards the default start');
+  assert.ok(url.includes('focus.point.lat=51.4545'), 'biased towards the current view');
+  assert.ok(!url.includes('boundary.rect'),
+    'a hard rectangle would make everywhere outside it unreachable');
   assert.ok(url.includes('api_key=test-key'));
+});
+
+test('place search falls back to the default start when the map has no view yet', async () => {
+  const { calls, fetchImpl } = geocodeStub([]);
+  await geocode('crookes', 'test-key', { fetchImpl });
+  assert.ok(calls[0].includes(`focus.point.lat=${CONFIG.DEFAULT_START.lat}`));
+});
+
+test('place search ignores a focus that is not a real position', async () => {
+  const { calls, fetchImpl } = geocodeStub([]);
+  await geocode('crookes', 'test-key', { fetchImpl, focus: { lat: NaN, lon: undefined } });
+  assert.ok(calls[0].includes(`focus.point.lat=${CONFIG.DEFAULT_START.lat}`));
 });
 
 test('place search returns label and position', async () => {
   const { fetchImpl } = geocodeStub([
     { properties: { label: 'Crookes, Sheffield', locality: 'Sheffield' }, geometry: { coordinates: [-1.51, 53.38] } },
   ]);
-  const hits = await geocode('crookes', 'k', fetchImpl);
+  const hits = await geocode('crookes', 'k', { fetchImpl });
   assert.equal(hits.length, 1);
   assert.equal(hits[0].label, 'Crookes, Sheffield');
   assert.equal(hits[0].lat, 53.38);
@@ -213,17 +225,17 @@ test('place search returns label and position', async () => {
 
 test('place search does not fire on a one-character query', async () => {
   const { calls, fetchImpl } = geocodeStub([]);
-  assert.deepEqual(await geocode('c', 'k', fetchImpl), []);
+  assert.deepEqual(await geocode('c', 'k', { fetchImpl }), []);
   assert.equal(calls.length, 0, 'no request is spent on a single letter');
 });
 
 test('place search explains a quota refusal in plain English', async () => {
   const { fetchImpl } = geocodeStub([], 403);
-  await assert.rejects(() => geocode('crookes', 'k', fetchImpl), /quota/i);
+  await assert.rejects(() => geocode('crookes', 'k', { fetchImpl }), /quota/i);
 });
 
 test('place search needs a key before it calls anything', async () => {
   const { calls, fetchImpl } = geocodeStub([]);
-  await assert.rejects(() => geocode('crookes', '', fetchImpl), /API key/);
+  await assert.rejects(() => geocode('crookes', '', { fetchImpl }), /API key/);
   assert.equal(calls.length, 0);
 });

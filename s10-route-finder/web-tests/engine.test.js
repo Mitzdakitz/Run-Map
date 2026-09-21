@@ -177,8 +177,11 @@ test('an empty store falls back to bearing only', () => {
 test('a high target picks the biggest elevation difference, a flat one the smallest', () => {
   const store = newStore();
   store.addCoords([[-1.5040, 53.3736, 180]]);
+  // No ties: the start is 180, so the gaps are 5, 140 and 28. A tie here would
+  // be settled by whatever order the store happens to scan in, which is not
+  // the property this test is meant to pin down.
   store.addCoords([
-    [-1.4890, 53.3736, 185], [-1.4880, 53.3740, 320], [-1.4900, 53.3730, 175],
+    [-1.4890, 53.3736, 185], [-1.4880, 53.3740, 320], [-1.4900, 53.3730, 152],
   ]);
   const high = store.pickWaypoint(53.3736, -1.5040, 90, 1000, 'high');
   assert.equal(high.usedStore, true);
