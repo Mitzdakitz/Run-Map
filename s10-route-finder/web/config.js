@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-23.2';
+export const APP_VERSION = '2026-09-23.3';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -63,6 +63,10 @@ export const CONFIG = {
   DISTANCE_TOLERANCE: 0.05,
   ASCENT_TOLERANCE: 0.15,
   RESULTS_RETURNED: 3,
+  /* How many past searches stay on screen. Each is about 0.9 MB of coordinates
+   * and profiles, and every one of its routes gets a card and a sparkline
+   * rebuilt whenever the selection changes. */
+  GROUPS_KEPT: 6,
   PLOT_BUDGET: 60,               // routing requests one plotting session may spend
   /* Releasing a pan drops a point straight away. The points appear at once, but
    * the routing request behind them waits a moment, so panning out several in
