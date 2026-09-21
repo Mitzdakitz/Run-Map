@@ -146,7 +146,12 @@
     /* minmax(0,1fr) rather than an implicit auto column. An auto track cannot
        shrink below its content's minimum, so one row that will not wrap makes
        every row wider than the screen and the whole page scrolls sideways. */
-    display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 10px;
+    /* max-content rather than auto rows. With a definite height the grid hands
+       the last row only the space left over, so a tall sheet was drawn 522px
+       high around 800px of content and the overflow painted straight onto the
+       map with no panel behind it. */
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content; align-content: start; gap: 10px;
     padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px));
     pointer-events: none;          /* the map shows through the gaps */
   }
@@ -174,7 +179,7 @@
   .mode.on { background: var(--accent-2); color: #fff; box-shadow: 0 2px 8px rgba(80,95,55,.35); }
   :root[data-theme="dark"] .mode.on, :root:not([data-theme="light"]) .mode.on { color: #241d17; }
   .icon-btn {
-    flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+    flex: none; width: 44px; height: 44px; display: grid; place-items: center;
     border-radius: 999px; border: 1px solid var(--glass-line); background: var(--sunken);
     color: var(--ink); cursor: pointer;
   }
@@ -184,7 +189,7 @@
   .query { display: flex; align-items: center; gap: 8px; padding: 7px 7px 7px 6px; border-radius: 999px; }
   .terms-summary {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
-    font: 600 15px "Figtree", sans-serif; min-height: 40px; padding: 0 14px; border-radius: 999px;
+    font: 600 15px "Figtree", sans-serif; min-height: 44px; padding: 0 14px; border-radius: 999px;
     background: transparent; border: 0; cursor: pointer; color: var(--ink);
     overflow: hidden; white-space: nowrap; text-align: left;
     /* A button centres its contents, so an overflowing line gets clipped at
@@ -198,6 +203,10 @@
   .terms-summary .sep { color: var(--ink); opacity: .3; font-weight: 400; }
   .terms-summary #sumClimb { color: var(--accent-deep); }
   .terms-summary .cue { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--faint); padding-left: 8px; }
+  /* On a phone the cue costs about forty pixels and the whole pill is already
+     a button, so the start name gets that space instead of being squeezed to
+     a single letter. */
+  @media (max-width: 460px) { .terms-summary .cue { display: none; } }
   .terms-summary:hover { background: var(--sunken); }
 
   /* ---------- controls ---------- */
@@ -219,7 +228,7 @@
     color: var(--ink); background: var(--sunken); border: 1px solid var(--line); border-radius: 999px;
   }
   select { padding-right: 8px; }
-  input::placeholder { color: var(--faint); }
+  input::placeholder { color: var(--faint); font-size: 13.5px; }
   input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -395,6 +404,12 @@
     border: 1px solid var(--glass-line); box-shadow: var(--shadow);
   }
   .map-lock[aria-pressed="true"] { color: var(--muted); }
+  /* Scrolled up over the map, the sheet owns the screen and these would
+     otherwise float on top of its buttons. */
+  body.sheet-up .map-tools, body.sheet-up .map-lock, body.sheet-up .map-legend {
+    opacity: 0; pointer-events: none;
+  }
+  .map-tools, .map-lock, .map-legend { transition: opacity 140ms ease; }
   /* in plot mode the padlock takes the top slot and the tools drop below it */
   body:has(#plotLock:not([hidden])) .map-tools { top: calc(env(safe-area-inset-top, 0px) + 192px); }
   /* while the search form is open it owns the top of the screen */
@@ -454,7 +469,10 @@
   #messages:empty { display: none; }
 
   /* ---------- settings, folded away ---------- */
-  .settings { border-radius: var(--r-lg); background: transparent; border: 1px solid var(--line-soft); padding: 0; }
+  .settings {
+    border-radius: var(--r-lg); padding: 0;
+    background: var(--glass-tile); border: 1px solid var(--glass-line);
+  }
   .settings > summary {
     list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
     gap: 10px; padding: 14px 16px; min-height: 44px;
@@ -578,10 +596,10 @@
       </label>
     </div>
     <div class="field">
-      <input type="text" id="climbExact" inputmode="numeric" placeholder="Or exact metres of ascent" aria-label="Exact metres of ascent">
+      <input type="text" id="climbExact" inputmode="numeric" placeholder="Exact metres of climb" aria-label="Exact metres of ascent">
     </div>
     <div class="field">
-      <input type="search" id="placeSearch" placeholder="Start: search a place or postcode"
+      <input type="search" id="placeSearch" placeholder="Search a place or postcode"
              autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search for a start place">
       <button type="button" class="primary" id="locateBtn" title="Use my current location">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" aria-hidden="true">
@@ -690,7 +708,7 @@
         </div>
         <div class="field">
           <input type="text" id="routeName" maxlength="80" autocomplete="off"
-                 placeholder="Name the route on screen" aria-label="Name for the route being saved">
+                 placeholder="Name this route" aria-label="Name for the route being saved">
           <button type="button" class="primary" id="saveRouteBtn">Save</button>
         </div>
         <div class="saved-list" id="savedList"></div>

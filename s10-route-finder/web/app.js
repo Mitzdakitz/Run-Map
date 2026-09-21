@@ -155,6 +155,7 @@ function boot() {
   }
 
   watchTheme();
+  watchSheetPosition();
   setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
 
   if (!read(STORAGE.key)) {
@@ -328,6 +329,36 @@ function setToolLabel(button, on, offText, onText) {
   const label = button.querySelector ? button.querySelector('.label') : null;
   if (label) label.textContent = text;
   else button.textContent = text;
+}
+
+function scrollSheet(top) {
+  const scroller = document.querySelector('.scroll');
+  if (scroller && scroller.scrollTo) scroller.scrollTo({ top, behavior: 'smooth' });
+}
+
+/* The controls that float over the map are only useful while the map is what
+ * you are looking at. Once the sheet is scrolled up over them they are just
+ * something sitting on top of its buttons, so they get out of the way. */
+function watchSheetPosition() {
+  const scroller = document.querySelector('.scroll');
+  if (!scroller || !scroller.addEventListener) return;
+  let queued = false;
+  const update = () => {
+    queued = false;
+    const sheet = document.querySelector('.sheet');
+    if (!sheet || !sheet.getBoundingClientRect) return;
+    const covered = sheet.getBoundingClientRect().top < 300;
+    if (document.body && document.body.classList) {
+      document.body.classList.toggle('sheet-up', covered);
+    }
+  };
+  scroller.addEventListener('scroll', () => {
+    if (queued) return;
+    queued = true;
+    if (globalThis.requestAnimationFrame) globalThis.requestAnimationFrame(update);
+    else update();
+  });
+  update();
 }
 
 function message(kind, text) {
@@ -1861,10 +1892,15 @@ function wireEvents() {
   });
   $('plotLock').addEventListener('click', () => setPlotLock(!plot.locked));
 
+  /* A toggle, not a one-way trip. Opening settings scrolls the page to the
+   * bottom, and without a way back the same button appeared to do nothing on
+   * a second press while the rest of the app was off-screen. */
   $('settingsJump').addEventListener('click', () => {
-    $('settingsPanel').open = true;
-    const scroller = document.querySelector('.scroll');
-    if (scroller && scroller.scrollTo) scroller.scrollTo({ top: 1e6, behavior: 'smooth' });
+    const panel = $('settingsPanel');
+    const opening = !panel.open;
+    panel.open = opening;
+    $('settingsJump').setAttribute('aria-expanded', String(opening));
+    scrollSheet(opening ? 1e6 : 0);
   });
   $('saveRouteBtn').addEventListener('click', saveCurrentRoute);
   $('routeName').addEventListener('keydown', (e) => {
