@@ -2,8 +2,9 @@
  * All search logic lives in routefinder.js; this file only presents it. */
 import { APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 import {
-  OrsClient, TerrainStore, estimateSeconds, formatDuration, geocode, gradientAt,
-  gradientBand, longestClimb, parsePace, profile, reverseProfile, search, steepestWindow,
+  OrsClient, TerrainStore, diagnose, estimateSeconds, formatDuration, geocode,
+  gradientAt, gradientBand, longestClimb, parsePace, profile, readDiagnosis,
+  reverseProfile, search, steepestWindow,
 } from './routefinder.js';
 
 const $ = (id) => document.getElementById(id);
@@ -218,6 +219,72 @@ function message(kind, text) {
   $('messages').appendChild(div);
 }
 function clearMessages() { $('messages').textContent = ''; }
+
+// --- connection diagnosis --------------------------------------------------
+/* A fetch that fails tells the page nothing, and on a phone there is no Network
+ * tab to fall back on. This sends three requests that fail in different ways and
+ * reports which one broke, so the cause can be named instead of guessed at. */
+function renderDiagnosis(results, verdict) {
+  const box = $('diagnosis');
+  box.hidden = false;
+  box.textContent = '';
+
+  const summary = document.createElement('p');
+  summary.className = 'verdict';
+  summary.textContent = verdict.text;
+  box.appendChild(summary);
+
+  const list = document.createElement('ul');
+  results.forEach((r) => {
+    const li = document.createElement('li');
+    const answered = r.outcome === 'answered';
+    const good = answered && r.status < 400;
+
+    const mark = document.createElement('span');
+    mark.className = 'mark';
+    mark.textContent = good ? '\u2713' : (answered ? '\u2014' : '\u2717');
+    li.appendChild(mark);
+
+    const probe = document.createElement('span');
+    probe.className = 'probe';
+    probe.textContent = r.label;
+    const note = document.createElement('span');
+    note.className = 'note';
+    note.textContent = r.note;
+    probe.appendChild(note);
+    li.appendChild(probe);
+
+    const result = document.createElement('span');
+    result.className = 'result';
+    result.textContent = answered ? `HTTP ${r.status}` : 'no answer';
+    li.appendChild(result);
+
+    list.appendChild(li);
+  });
+  box.appendChild(list);
+}
+
+async function runDiagnosis() {
+  const button = $('diagnose');
+  clearMessages();
+  if (!apiKey) {
+    message('error', 'Add your key first, then test the connection.');
+    return;
+  }
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = 'Testing\u2026';
+  $('diagnosis').hidden = true;
+  try {
+    const results = await diagnose(apiKey);
+    renderDiagnosis(results, readDiagnosis(results));
+  } catch (err) {
+    message('error', `The test itself failed: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
 
 // --- start point -----------------------------------------------------------
 function insideBbox(lat, lon) {
@@ -459,8 +526,8 @@ function handleResult(result, target, client, stored) {
       && result.warnings.every((w) => w.startsWith('Could not reach OpenRouteService'));
     message('warn', allUnreachable
       ? 'Every request failed before it reached OpenRouteService, so this is not about '
-        + 'your start point or distance. Check the reason above, wait a minute if you have '
-        + 'been searching repeatedly, then try again.'
+        + 'your start point or distance. Open Settings and press "Test the connection": '
+        + 'it sends three requests designed to fail in different ways and names the cause.'
       : 'No routes came back. Try a different start point or distance.');
     return;
   }
@@ -1030,6 +1097,8 @@ function wireEvents() {
     }
     message('info', 'Key saved in this browser.');
   });
+
+  $('diagnose').addEventListener('click', runDiagnosis);
 
   $('changeKey').addEventListener('click', () => {
     $('keySaved').hidden = true;

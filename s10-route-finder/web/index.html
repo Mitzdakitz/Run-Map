@@ -233,6 +233,22 @@
   .empty { padding: 22px 13px; text-align: center; color: var(--muted); font-size: 14px; }
 
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+/* Connection diagnosis. Deliberately plain: it is read once, when something is
+   wrong, and needs to be legible rather than decorative. */
+#diagnosis { margin-top: 10px; font-size: 14px; }
+#diagnosis .verdict {
+  padding: 10px 12px; border-radius: 8px; line-height: 1.45;
+  background: var(--sunken); border: 1px solid var(--line);
+}
+#diagnosis ul { list-style: none; margin: 10px 0 0; padding: 0; }
+#diagnosis li {
+  display: flex; gap: 8px; align-items: baseline;
+  padding: 5px 0; border-top: 1px solid var(--line);
+}
+#diagnosis .mark { flex: none; width: 1.1em; text-align: center; }
+#diagnosis .probe { flex: 1 1 auto; min-width: 0; }
+#diagnosis .probe .note { display: block; color: var(--muted); font-size: 12px; }
+#diagnosis .result { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -392,8 +408,10 @@
         </div>
       </div>
       <div class="chips">
+        <button class="chip" type="button" id="diagnose">Test the connection</button>
         <button class="chip" type="button" id="clearTerrain">Clear terrain store</button>
       </div>
+      <div id="diagnosis" hidden></div>
       <p class="hint" style="margin:0">
         Free key from <a href="https://openrouteservice.org/dev/#/signup" rel="noopener">openrouteservice.org</a>.
         Routing and elevation by openrouteservice, map data &copy; OpenStreetMap contributors.

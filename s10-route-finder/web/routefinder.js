@@ -324,11 +324,10 @@ export class OrsClient {
        * looking exactly like being offline. Say so rather than guess. */
       throw new OrsError(
         'Could not reach OpenRouteService, and the browser will not say why. '
-        + 'The usual causes are a dropped connection, the per minute or daily '
-        + 'limit being reached, or a key that was refused. A refusal arrives '
-        + 'without the headers a browser needs, which makes it look identical '
-        + 'to being offline. Check your usage on your openrouteservice.org '
-        + 'dashboard.',
+        + 'A refusal arrives without the headers a browser needs, so an '
+        + 'exhausted allowance, a rejected key and a dropped connection all '
+        + 'look identical from here. Settings has a "Test the connection" '
+        + 'button that works out which of them it is.',
       );
     }
 
@@ -870,4 +869,183 @@ export async function geocode(text, apiKey, fetchImpl = null) {
     lat: f.geometry.coordinates[1],
     lon: f.geometry.coordinates[0],
   }));
+}
+
+// --- connection diagnosis ---------------------------------------------------
+/* When a fetch rejects, the browser tells the page nothing: a refused key, an
+ * exhausted quota and a dropped connection are one indistinguishable failure.
+ * On a phone there is no Network tab to fall back on, so the app has to work
+ * out the difference by sending requests that fail in different ways.
+ *
+ * The control probe is the important one. It sends a routing request with a
+ * key that cannot possibly be valid. If that refusal comes back readable, then
+ * refusals are visible here, and a failure that is NOT readable cannot be one. */
+
+const DIAG_POINT = { lat: 53.3736, lon: -1.5040 };
+const DIAG_BAD_KEY = 'ors-diagnostic-control-invalid';
+
+function failureDetail(err) {
+  const name = (err && err.name) || 'Error';
+  const text = (err && err.message) || String(err);
+  return `${name}: ${text}`;
+}
+
+export async function diagnose(apiKey, fetchImpl = null, pause = sleep) {
+  const doFetch = fetchImpl || ((...args) => globalThis.fetch(...args));
+  const results = [];
+
+  const routingRequest = (key) => doFetch(
+    `${CONFIG.ORS_BASE_URL}/v2/directions/${CONFIG.ORS_PROFILE}/geojson`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: key,
+        'Content-Type': 'application/json; charset=utf-8',
+        Accept: 'application/geo+json',
+      },
+      body: JSON.stringify({
+        coordinates: [
+          [DIAG_POINT.lon, DIAG_POINT.lat],
+          [DIAG_POINT.lon + 0.004, DIAG_POINT.lat],
+        ],
+        elevation: true,
+        units: 'm',
+      }),
+    },
+  );
+
+  const placeRequest = () => doFetch(
+    `${CONFIG.ORS_BASE_URL}/geocode/search`
+    + `?api_key=${encodeURIComponent(apiKey)}&text=Crookes&size=1`,
+    { method: 'GET' },
+  );
+
+  const probes = [
+    {
+      id: 'place',
+      label: 'Place search',
+      note: 'key in the address, no preflight, separate quota',
+      send: placeRequest,
+    },
+    {
+      id: 'refused',
+      label: 'Routing with a deliberately wrong key',
+      note: 'the control: shows what a refusal looks like from here',
+      send: () => routingRequest(DIAG_BAD_KEY),
+    },
+    {
+      id: 'routing',
+      label: 'Routing with your key',
+      note: 'the real request shape, costs one routing request',
+      send: () => routingRequest(apiKey),
+    },
+  ];
+
+  for (const probe of probes) {
+    const entry = { id: probe.id, label: probe.label, note: probe.note };
+    try {
+      const response = await probe.send();
+      entry.outcome = 'answered';
+      entry.status = response.status;
+    } catch (err) {
+      entry.outcome = 'blocked';
+      entry.detail = failureDetail(err);
+    }
+    results.push(entry);
+    if (probe !== probes[probes.length - 1]) await pause(1600);
+  }
+
+  return results;
+}
+
+/* Turn the pattern into a verdict. Kept separate from the sending so it can be
+ * tested against every combination without touching the network. */
+export function readDiagnosis(results) {
+  const by = (id) => results.find((r) => r.id === id) || {};
+  const place = by('place');
+  const control = by('refused');
+  const routing = by('routing');
+
+  const answered = (p) => p.outcome === 'answered';
+  const ok = (p) => answered(p) && p.status < 400;
+
+  if (ok(routing)) {
+    return {
+      verdict: 'working',
+      text: 'Routing answered normally just now, so the key, the quota and the '
+        + 'connection are all fine at this moment. The earlier failures were '
+        + 'either temporary or specific to the round trip request. Try a search.',
+    };
+  }
+
+  if (routing.status === 403) {
+    return {
+      verdict: 'refused',
+      text: 'OpenRouteService refused the routing request outright (403). That '
+        + 'is either the daily routing allowance being spent or the key not '
+        + 'being accepted. The allowance resets 24 hours after the first '
+        + 'request of the day. Your dashboard on openrouteservice.org shows '
+        + 'which of the two it is.',
+    };
+  }
+
+  if (routing.status === 429) {
+    return {
+      verdict: 'rate-limited',
+      text: 'The per minute limit was hit (429). Wait a minute and try again.',
+    };
+  }
+
+  if (answered(routing)) {
+    return {
+      verdict: 'error',
+      text: `Routing answered with HTTP ${routing.status}, so the connection and `
+        + 'the key are fine and the request itself was rejected. That is a bug '
+        + 'in the app rather than anything you have done.',
+    };
+  }
+
+  /* Routing was blocked. What the control did decides what that means. */
+  if (answered(control)) {
+    return {
+      verdict: 'not-a-refusal',
+      text: 'This is the useful one. A deliberately wrong key came back '
+        + `readable (HTTP ${control.status}), so refusals ARE visible to the app `
+        + 'from your phone. Your own routing request was not readable at all, '
+        + 'which means it is not being refused for quota or for the key. '
+        + 'Something is stopping the request before it gets an answer: the '
+        + 'network dropping it, or the routing service itself being down. '
+        + 'Worth retrying on a different connection, mobile data against wifi.',
+    };
+  }
+
+  if (ok(place)) {
+    return {
+      verdict: 'likely-quota',
+      text: 'Place search answered, so your connection works and your key is '
+        + 'accepted. Routing was blocked and so was the control, which means '
+        + 'refusals are invisible here, so a refusal is exactly what this looks '
+        + 'like. Place search and routing have separate allowances, so a good '
+        + 'place search does not clear the routing one. Most likely the daily '
+        + 'routing allowance is spent. It resets 24 hours after your first '
+        + 'request of the day, and your openrouteservice.org dashboard confirms it.',
+    };
+  }
+
+  if (answered(place)) {
+    return {
+      verdict: 'key',
+      text: `Place search answered with HTTP ${place.status} and routing was `
+        + 'blocked. A readable refusal on place search points at the key being '
+        + 'rejected rather than the connection. Worth pasting the key again.',
+    };
+  }
+
+  return {
+    verdict: 'unreachable',
+    text: 'Nothing answered, not even a request with a deliberately wrong key. '
+      + 'Requests are not reaching OpenRouteService at all. That is the '
+      + 'connection, or something on the network blocking the requests. Try '
+      + 'mobile data instead of wifi, or the other way round.',
+  };
 }
