@@ -33,6 +33,7 @@ let startMarker;
 let store;
 let start = { ...CONFIG.DEFAULT_START };
 let paceSeconds = null;
+let apiKey = '';
 let savedStarts = [];
 let searchCount = 0;
 let busy = false;
@@ -60,7 +61,27 @@ function installErrorReporter() {
       + 'This is a bug, not something you did.';
     host.appendChild(div);
   };
-  window.addEventListener('error', (e) => report(e.message || 'script error'));
+
+  window.addEventListener('error', (e) => {
+    /* Browsers hide the detail of an error thrown by a script from another
+     * origin and report a bare "Script error." with no file or line. Those
+     * come from browser extensions and third-party scripts far more often
+     * than from this app, and there is nothing in them anyone can act on, so
+     * putting one on screen as "a bug" is crying wolf. They go to the console
+     * instead. Errors in this app's own files are same-origin and keep their
+     * full detail, so they still get reported. */
+    if (!e.filename || e.message === 'Script error.') {
+      console.warn('Opaque cross-origin script error, not shown on the page:', e.message);
+      return;
+    }
+    if (e.filename.indexOf(window.location.origin) !== 0) {
+      console.warn('Error from a third-party script, not shown on the page:', e.filename, e.message);
+      return;
+    }
+    const where = `${e.filename.split('/').pop()}:${e.lineno}`;
+    report(`${e.message} (${where})`);
+  });
+
   window.addEventListener('unhandledrejection', (e) => report(
     (e.reason && e.reason.message) || 'a background task failed',
   ));
@@ -171,12 +192,22 @@ function buildClimbPresets() {
 }
 
 function loadSettings() {
-  $('apiKey').value = read(STORAGE.key, '');
+  apiKey = read(STORAGE.key, '');
+  renderKeyState();
   const pace = read(STORAGE.pace, '');
   $('pace').value = pace;
   paceSeconds = parsePace(pace);
   try { savedStarts = JSON.parse(read(STORAGE.starts, '[]')) || []; } catch { savedStarts = []; }
   renderSavedStarts();
+}
+
+/* Once a key is saved the entry field is put away, because it is set once and
+ * then never touched again. The stored key is never written back into the DOM. */
+function renderKeyState() {
+  const saved = Boolean(apiKey);
+  $('keySaved').hidden = !saved;
+  $('keyEntry').hidden = saved;
+  if (saved) $('apiKey').value = '';
 }
 
 // --- messages --------------------------------------------------------------
@@ -360,7 +391,6 @@ function setBusy(state) {
 
 async function runSearch() {
   clearMessages();
-  const apiKey = ($('apiKey').value || '').trim() || read(STORAGE.key, '');
   if (!apiKey) {
     message('error', 'Add your OpenRouteService key in Settings at the bottom of the page first.');
     return;
@@ -883,7 +913,7 @@ function onPlaceInput(value) {
   if (value.trim().length < 2) { results.hidden = true; results.textContent = ''; return; }
   geocodeTimer = setTimeout(async () => {
     try {
-      const hits = await geocode(value, ($('apiKey').value || '').trim() || read(STORAGE.key, ''));
+      const hits = await geocode(value, apiKey);
       results.textContent = '';
       results.hidden = hits.length === 0;
       hits.forEach((hit) => {
@@ -979,12 +1009,29 @@ function wireEvents() {
     const value = $('apiKey').value.trim();
     clearMessages();
     if (!value) { message('error', 'Paste your key first.'); return; }
+    apiKey = value;
+    renderKeyState();
     if (!write(STORAGE.key, value)) {
       message('warn', 'This browser refused to save the key, which happens in Private Browsing. '
         + 'It will work for this session but you will have to paste it again next time.');
       return;
     }
     message('info', 'Key saved in this browser.');
+  });
+
+  $('changeKey').addEventListener('click', () => {
+    $('keySaved').hidden = true;
+    $('keyEntry').hidden = false;
+    $('apiKey').value = '';
+    $('apiKey').focus();
+  });
+
+  $('removeKey').addEventListener('click', () => {
+    apiKey = '';
+    write(STORAGE.key, '');
+    renderKeyState();
+    clearMessages();
+    message('warn', 'Key removed from this browser. Searching needs one.');
   });
 
   $('pace').addEventListener('input', (e) => {
