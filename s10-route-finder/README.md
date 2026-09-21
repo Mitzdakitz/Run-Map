@@ -68,20 +68,24 @@ Screen** for an icon that opens without Safari's chrome.
 3. **Press Search.** Each search spends up to `REQUEST_BUDGET` (default 12)
    routing requests and takes around 20 seconds, because requests are spaced
    out to stay under the free tier's 40 per minute.
-4. **Compare.** All the candidates are drawn on the map at once, the selected
+4. **Find your start.** The chequered disc marks where the route begins and
+   ends, which on a loop is otherwise invisible because the line closes on
+   itself. Drag it to move your start. On an out and back, a second marker
+   shows where you turn round and how far in that is.
+5. **Compare.** All the candidates are drawn on the map at once, the selected
    one solid with direction arrows and the rest faint. Tap either a card or a
    faint line to switch. Cards are ranked best first and share one elevation
    scale, so their sparklines are genuinely comparable rather than each
    stretched to fill its own box.
-5. **Inspect.** The detail panel gives the longest sustained climb and the
+6. **Inspect.** The detail panel gives the longest sustained climb and the
    steepest 200 m, which say more about whether a route is nasty than the
    total ascent does. The elevation profile below it is coloured by gradient:
    blue where you descend, warm where you climb. Drag across it and a marker
    follows the route on the map, so you can see exactly where the hill is.
-6. **Reverse direction** to see the same route run the other way. The distance
+7. **Reverse direction** to see the same route run the other way. The distance
    does not change but the shape of the effort does, which in Sheffield is most
    of the decision.
-7. **Search again** spends a fresh budget with new seeds and keeps the previous
+8. **Search again** spends a fresh budget with new seeds and keeps the previous
    results below, so you can compare across searches.
 
 ### Estimated times

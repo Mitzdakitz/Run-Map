@@ -1,6 +1,6 @@
 /* UI: map, search form, ranked cards, elevation profile.
  * All search logic lives in routefinder.js; this file only presents it. */
-import { CONFIG, SHAPE_LOOP, STORAGE } from './config.js';
+import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 import {
   OrsClient, TerrainStore, estimateSeconds, formatDuration, geocode, gradientAt,
   gradientBand, longestClimb, parsePace, profile, reverseProfile, search, steepestWindow,
@@ -43,7 +43,7 @@ let selected = { group: 0, route: 0 };
 let domain = null;           // shared chart scale for the selected group
 let activeProfile = [];      // the selected route, in the direction being shown
 
-const routeLayer = { lines: [], hits: [], arrows: null, cursor: null };
+const routeLayer = { lines: [], hits: [], arrows: null, cursor: null, turn: null };
 let terrainLayer = null;
 
 // --- boot ------------------------------------------------------------------
@@ -98,6 +98,44 @@ function boot() {
   });
 }
 
+/* Map overlays keep literal colours rather than theme tokens: OpenStreetMap
+ * tiles are light in both themes, so the marks have to read on a light ground
+ * whatever the page around them is doing. */
+const MAP_INK = '#1F5C4A';
+
+/* A chequered disc, so the point a loop begins and ends at is findable. On a
+ * loop the line closes on itself and the start is otherwise invisible. */
+function startFinishIcon() {
+  return L.divIcon({
+    className: 'sf-icon',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    html: `<svg width="28" height="28" viewBox="-14 -14 28 28" aria-hidden="true">
+             <circle r="12" fill="#FFFFFF" stroke="${MAP_INK}" stroke-width="2.5"/>
+             <g fill="${MAP_INK}">
+               <rect x="-6" y="-6" width="6" height="6"/>
+               <rect x="0" y="0" width="6" height="6"/>
+             </g>
+           </svg>`,
+  });
+}
+
+/* Where an out and back turns round. Same question as start and finish, but
+ * for the other shape. */
+function turnaroundIcon() {
+  return L.divIcon({
+    className: 'turn-icon',
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    html: `<svg width="24" height="24" viewBox="-12 -12 24 24" aria-hidden="true">
+             <circle r="10" fill="#FFFFFF" stroke="${MAP_INK}" stroke-width="2"/>
+             <path d="M -3.5 4 L -3.5 -1 A 3.5 3.5 0 0 1 3.5 -1 L 3.5 3"
+                   fill="none" stroke="${MAP_INK}" stroke-width="2" stroke-linecap="round"/>
+             <path d="M 0.6 2.2 L 3.5 5.2 L 6.4 2.2 Z" fill="${MAP_INK}"/>
+           </svg>`,
+  });
+}
+
 function initMap() {
   if (typeof L === 'undefined') {
     throw new Error('the Leaflet mapping library did not load');
@@ -108,7 +146,10 @@ function initMap() {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map);
 
-  startMarker = L.marker([start.lat, start.lon], { draggable: true }).addTo(map);
+  startMarker = L.marker([start.lat, start.lon], {
+    draggable: true, icon: startFinishIcon(), zIndexOffset: 1000,
+  }).addTo(map);
+  startMarker.bindTooltip('Start and finish. Drag to move it.', { direction: 'top', offset: [0, -14] });
   startMarker.on('dragend', () => {
     const p = startMarker.getLatLng();
     setStart(p.lat, p.lng, 'Dropped pin');
@@ -463,10 +504,31 @@ function drawRoutes(fit) {
   });
 
   drawArrows();
+  drawTurnaround();
   if (fit) {
     const chosen = routeLayer.lines[selected.route];
     if (chosen) map.fitBounds(chosen.getBounds(), { padding: [28, 28] });
   }
+}
+
+/* Out and back retraces itself, so the far end is the only point on the line
+ * you actually make a decision at. */
+function drawTurnaround() {
+  if (!map) return;
+  if (routeLayer.turn) { map.removeLayer(routeLayer.turn); routeLayer.turn = null; }
+  const group = groups[selected.group];
+  if (!group) return;
+  const candidate = group.candidates[selected.route];
+  if (candidate.shape !== SHAPE_OUT_AND_BACK) return;
+
+  const points = shownProfile();
+  if (points.length < 3) return;
+  const far = points[Math.floor((points.length - 1) / 2)];
+  routeLayer.turn = L.marker([far.lat, far.lon], {
+    icon: turnaroundIcon(), zIndexOffset: 900, keyboard: false,
+  }).addTo(map);
+  routeLayer.turn.bindTooltip(`Turn around here, ${far.km.toFixed(2)} km in`,
+    { direction: 'top', offset: [0, -12] });
 }
 
 function drawArrows() {
