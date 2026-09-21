@@ -47,9 +47,61 @@ const routeLayer = { lines: [], hits: [], arrows: null, cursor: null };
 let terrainLayer = null;
 
 // --- boot ------------------------------------------------------------------
+/* Anything that throws lands on the page rather than only in a console nobody
+ * opens on a phone. Without this, one bad line leaves every control dead with
+ * no visible reason. */
+function installErrorReporter() {
+  const report = (what) => {
+    const host = document.getElementById('messages');
+    if (!host) return;
+    const div = document.createElement('div');
+    div.className = 'msg error';
+    div.textContent = `Something went wrong in the app: ${what}. `
+      + 'This is a bug, not something you did.';
+    host.appendChild(div);
+  };
+  window.addEventListener('error', (e) => report(e.message || 'script error'));
+  window.addEventListener('unhandledrejection', (e) => report(
+    (e.reason && e.reason.message) || 'a background task failed',
+  ));
+}
+
 function boot() {
+  installErrorReporter();
   store = new TerrainStore({ storage: safeStorage() });
 
+  // The controls are wired before the map, so a map failure cannot take the
+  // whole interface down with it.
+  buildClimbPresets();
+  loadSettings();
+  wireEvents();
+  updateSummary();
+  refreshTerrainCount();
+
+  try {
+    initMap();
+  } catch (err) {
+    message('error', `The map could not start: ${err.message}. `
+      + 'The rest of the page still works, but routes cannot be drawn. '
+      + 'Check that Leaflet loaded, then reload.');
+  }
+
+  setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
+
+  if (!read(STORAGE.key)) {
+    message('warn', 'Add your OpenRouteService key in Settings at the bottom of the page before searching. '
+      + 'It stays in this browser and is only ever sent to OpenRouteService.');
+  }
+  window.addEventListener('resize', () => {
+    if (map) map.invalidateSize();
+    if (activeProfile.length) drawChart();
+  });
+}
+
+function initMap() {
+  if (typeof L === 'undefined') {
+    throw new Error('the Leaflet mapping library did not load');
+  }
   map = L.map('map', { zoomControl: true }).setView([start.lat, start.lon], CONFIG.DEFAULT_ZOOM);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -63,19 +115,6 @@ function boot() {
   });
   map.on('click', (e) => setStart(e.latlng.lat, e.latlng.lng, 'Map pin'));
   map.on('zoomend', () => { if (activeProfile.length) drawArrows(); });
-
-  buildClimbPresets();
-  loadSettings();
-  setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
-  wireEvents();
-  updateSummary();
-  refreshTerrainCount();
-
-  if (!read(STORAGE.key)) {
-    message('warn', 'Add your OpenRouteService key in Settings at the bottom of the page before searching. '
-      + 'It stays in this browser and is only ever sent to OpenRouteService.');
-  }
-  window.addEventListener('resize', () => { map.invalidateSize(); if (activeProfile.length) drawChart(); });
 }
 
 function buildClimbPresets() {
@@ -115,7 +154,7 @@ function insideBbox(lat, lon) {
 
 function setStart(lat, lon, name, { silent = false } = {}) {
   start = { lat, lon, name: name || 'Start' };
-  startMarker.setLatLng([lat, lon]);
+  if (startMarker) startMarker.setLatLng([lat, lon]);
   $('startPill').textContent = `Start: ${start.name}`;
   $('sumStart').textContent = start.name;
   const ok = insideBbox(lat, lon);
@@ -143,7 +182,7 @@ function renderSavedStarts() {
         return;
       }
       setStart(s.lat, s.lon, s.name);
-      map.setView([s.lat, s.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
+      if (map) map.setView([s.lat, s.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
       updateSummary();
     });
     host.appendChild(chip);
@@ -394,6 +433,7 @@ function selectRoute(gi, ri, { fit = false } = {}) {
 
 // --- map -------------------------------------------------------------------
 function drawRoutes(fit) {
+  if (!map) return;
   routeLayer.lines.forEach((l) => map.removeLayer(l));
   routeLayer.hits.forEach((l) => map.removeLayer(l));
   routeLayer.lines = [];
@@ -430,6 +470,7 @@ function drawRoutes(fit) {
 }
 
 function drawArrows() {
+  if (!map) return;
   if (routeLayer.arrows) map.removeLayer(routeLayer.arrows);
   routeLayer.arrows = L.layerGroup().addTo(map);
   const points = shownProfile();
@@ -596,6 +637,7 @@ function moveCursor(clientX) {
     + `<span class="num">${Math.round(point.ele)} m</span> &middot; `
     + `<span class="num">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
 
+  if (!map) return;
   if (!routeLayer.cursor) {
     routeLayer.cursor = L.circleMarker([point.lat, point.lon], {
       radius: 7, color: '#FFFFFF', weight: 2.5, fillColor: '#4a3aa7', fillOpacity: 1, interactive: false,
@@ -663,6 +705,7 @@ function refreshTerrainCount() {
 }
 
 function toggleTerrain(on) {
+  if (!map) return;
   if (terrainLayer) { map.removeLayer(terrainLayer); terrainLayer = null; }
   if (!on) return;
   const bounds = map.getBounds();
@@ -706,7 +749,7 @@ function onPlaceInput(value) {
             return;
           }
           setStart(hit.lat, hit.lon, hit.label.split(',')[0]);
-          map.setView([hit.lat, hit.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
+          if (map) map.setView([hit.lat, hit.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
           results.hidden = true;
           $('placeSearch').value = '';
           updateSummary();
@@ -735,7 +778,7 @@ function locateMe() {
         return;
       }
       setStart(latitude, longitude, 'My location');
-      map.setView([latitude, longitude], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
+      if (map) map.setView([latitude, longitude], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
       updateSummary();
     },
     (err) => {
