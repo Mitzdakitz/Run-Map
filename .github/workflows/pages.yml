@@ -1,0 +1,45 @@
+# Publishes s10-route-finder/web to GitHub Pages.
+# Pages source must be set to "GitHub Actions" in Settings, Pages.
+name: Deploy route finder to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it half way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Never publish an engine whose tests do not pass.
+      - run: node --test web-tests/*.test.js
+        working-directory: s10-route-finder
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: s10-route-finder/web
+      - id: deployment
+        uses: actions/deploy-pages@v4

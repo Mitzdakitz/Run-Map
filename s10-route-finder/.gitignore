@@ -1,8 +1,4 @@
-.env
-terrain.json
-ors_cache.json
+.DS_Store
+node_modules/
 __pycache__/
 *.pyc
-.pytest_cache/
-.venv/
-venv/
