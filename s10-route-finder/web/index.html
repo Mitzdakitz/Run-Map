@@ -74,14 +74,15 @@
   .hint { font-size: 13px; color: var(--muted); }
 
   .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
-  .panel > .body { padding: 13px; display: grid; gap: 11px; }
+  .panel .body { padding: 13px; display: grid; gap: 11px; }
+  .panel-split { border-top: 1px solid var(--line-soft); }
   .panel > .head {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 10px 13px; border-bottom: 1px solid var(--line-soft);
   }
 
   /* --- query row: one line, never ragged --- */
-  .query { display: flex; align-items: center; gap: 8px; padding: 9px 10px; }
+  .query { display: flex; align-items: center; gap: 8px; padding: 10px 13px; }
   .terms-summary {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
     font: inherit; font-size: 14px; min-height: 44px; padding: 0 12px; border-radius: 8px;
@@ -233,7 +234,7 @@
       <button class="primary" type="button" id="searchBtn">Search</button>
     </div>
     <div id="searchPanel" hidden>
-      <div class="body" style="border-top:1px solid var(--line-soft)">
+      <div class="body panel-split">
         <div class="field-grid">
           <label>Distance km
             <input type="text" id="distance" inputmode="decimal" value="5" aria-label="Distance in km">
