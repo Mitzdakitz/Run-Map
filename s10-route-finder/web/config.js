@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-22.4';
+export const APP_VERSION = '2026-09-22.5';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -64,6 +64,13 @@ export const CONFIG = {
   ASCENT_TOLERANCE: 0.15,
   RESULTS_RETURNED: 3,
   PLOT_BUDGET: 60,               // routing requests one plotting session may spend
+  /* Releasing a pan drops a point straight away. The points appear at once, but
+   * the routing request behind them waits a moment, so panning out several in
+   * quick succession costs one request rather than one each. */
+  PLOT_ROUTE_DEBOUNCE_MS: 550,
+  /* A pan shorter than this is a jitter or a tap, not an attempt to move the
+   * crosshair somewhere, and must not drop a point. */
+  PLOT_PAN_THRESHOLD_PX: 24,
   SAVED_ROUTES_LIMIT: 60,
   COORD_PRECISION: 5,            // about 1 m, and roughly halves what a route costs to store
 

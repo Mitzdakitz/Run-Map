@@ -311,6 +311,18 @@
 @media (max-width: 420px) {
   .modes { grid-template-columns: 1fr; }
 }
+/* --- the crosshair you aim with --- */
+/* Fixed to the middle of the map, never under the finger doing the panning,
+   which is the whole point: a fingertip hides the place it is aiming at. */
+.crosshair {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 450; pointer-events: none; line-height: 0;
+}
+.crosshair svg { display: block; }
+@media (prefers-reduced-motion: no-preference) {
+  .crosshair { transition: opacity 120ms ease; }
+}
 </style>
 </head>
 <body>
@@ -386,6 +398,19 @@
     <section class="panel map-panel">
       <div class="map-shell">
         <div id="map"></div>
+        <div class="crosshair" id="crosshair" hidden aria-hidden="true">
+          <svg width="46" height="46" viewBox="0 0 46 46">
+            <g fill="none" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round">
+              <circle cx="23" cy="23" r="12"/>
+              <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
+            </g>
+            <g fill="none" stroke="#1F5C4A" stroke-width="2" stroke-linecap="round">
+              <circle cx="23" cy="23" r="12"/>
+              <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
+            </g>
+            <circle cx="23" cy="23" r="2.6" fill="#1F5C4A" stroke="#FFFFFF" stroke-width="1.4"/>
+          </svg>
+        </div>
         <div class="map-legend">
           <span class="pill" id="startPill">Start</span>
           <span class="pill" id="dirPill" hidden>Clockwise</span>
@@ -403,8 +428,10 @@
           <button class="chip" type="button" id="plotDone">Finish</button>
         </div>
         <p class="hint" id="plotHelp" style="margin:0">
-          Tap the map to add a point, drag a point to move it, tap the line to add one in
-          between, tap a point to remove it. Save it under Saved routes below.
+          Drag the map so the crosshair sits where you want to go, then let go: the point
+          lands there. Your finger never covers the spot you are aiming at. Tapping the map
+          works too. Drag a point to move it, tap the line to add one in between, tap a
+          point to remove it. Save it under Saved routes below.
         </p>
       </div>
       <div class="map-foot">

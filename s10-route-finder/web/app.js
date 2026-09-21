@@ -67,7 +67,12 @@ const plot = {
   /* Leaflet can follow a drag with a click on the same marker. Without this the
    * point you just dragged would delete itself. */
   ignoreClicksUntil: 0,
+  /* Where the middle of the map was when this pan started, so a jitter can be
+   * told from a deliberate move. */
+  panFrom: null,
+  again: false,
 };
+let rerouteTimer = null;
 let library = null;
 let tiles = null;
 let hills = null;
@@ -204,8 +209,28 @@ function initMap() {
     setStart(p.lat, p.lng, 'Dropped pin');
   });
   map.on('click', (e) => {
-    if (plot.active) { addPlotPoint(e.latlng.lat, e.latlng.lng); return; }
+    if (plot.active) {
+      if (Date.now() < plot.ignoreClicksUntil) return;
+      addPlotPoint(e.latlng.lat, e.latlng.lng);
+      return;
+    }
     setStart(e.latlng.lat, e.latlng.lng, 'Map pin');
+  });
+
+  /* Aim with the crosshair: drag the ground under it and let go. Only a real
+   * pan counts. A zoom is not a pan, and neither is a wobble on the way to a
+   * tap, and either dropping a point would cost a routing request to undo. */
+  map.on('dragstart', () => { plot.panFrom = plot.active ? map.getCenter() : null; });
+  map.on('dragend', () => {
+    if (!plot.active || !plot.panFrom) return;
+    const from = plot.panFrom;
+    plot.panFrom = null;
+    const zoom = map.getZoom();
+    const moved = map.project(map.getCenter(), zoom).distanceTo(map.project(from, zoom));
+    if (moved < CONFIG.PLOT_PAN_THRESHOLD_PX) return;
+    const centre = map.getCenter();
+    plot.ignoreClicksUntil = Date.now() + 400;
+    addPlotPoint(centre.lat, centre.lng);
   });
   map.on('zoomend', () => { if (activeProfile.length) drawArrows(); });
 }
@@ -1199,7 +1224,7 @@ function drawPlot() {
         plot.waypoints = insertWaypoint(plot.waypoints, at, {
           lat: e.latlng.lat, lon: e.latlng.lng,
         });
-        reroute();
+        scheduleReroute();
       });
     }
   }
@@ -1216,14 +1241,14 @@ function drawPlot() {
       plot.ignoreClicksUntil = Date.now() + 400;
       pushHistory();
       plot.waypoints = moveWaypoint(plot.waypoints, i, { lat: p.lat, lon: p.lng });
-      reroute();
+      scheduleReroute();
     });
     marker.on('click', (e) => {
       L.DomEvent.stop(e);
       if (Date.now() < plot.ignoreClicksUntil) return;
       pushHistory();
       plot.waypoints = removeWaypoint(plot.waypoints, i);
-      reroute();
+      scheduleReroute();
     });
     plot.markers.push(marker);
   });
@@ -1244,6 +1269,7 @@ function renderPlotStats() {
   if (!n) { plotStatus('Tap the map to place your first point.'); return; }
   if (n < 2) { plotStatus('One point placed. Tap again to make a route.'); return; }
   if (plot.busy) { plotStatus(`Working out the route through ${n} points\u2026`); return; }
+  if (rerouteTimer) { plotStatus(`${n} points placed\u2026`); return; }
   if (!plot.route) { plotStatus(`${n} points placed.`); return; }
   const km = (plot.route.distanceM / 1000).toFixed(2);
   const up = Math.round(plot.route.ascentM);
@@ -1260,6 +1286,16 @@ function plotBudgetText() {
   $('quotaFill').style.width = `${Math.round((spent / CONFIG.PLOT_BUDGET) * 100)}%`;
 }
 
+/* Points land the instant you release. The request that turns them into a route
+ * waits a moment, so three points panned out in quick succession cost one
+ * request instead of three. */
+function scheduleReroute(delay = CONFIG.PLOT_ROUTE_DEBOUNCE_MS) {
+  drawPlot();
+  renderPlotStats();
+  if (rerouteTimer) clearTimeout(rerouteTimer);
+  rerouteTimer = setTimeout(() => { rerouteTimer = null; reroute(); }, delay);
+}
+
 async function reroute() {
   drawPlot();
   renderPlotStats();
@@ -1269,7 +1305,8 @@ async function reroute() {
     showPlotAsResult();
     return;
   }
-  if (plot.busy) return;
+  // A request already out: remember to go round again rather than drop the edit.
+  if (plot.busy) { plot.again = true; return; }
   plot.busy = true;
   renderPlotStats();
   try {
@@ -1283,6 +1320,7 @@ async function reroute() {
     drawPlot();
     renderPlotStats();
     showPlotAsResult();
+    if (plot.again) { plot.again = false; reroute(); }
   }
 }
 
@@ -1319,7 +1357,7 @@ function showPlotAsResult() {
 function addPlotPoint(lat, lon) {
   pushHistory();
   plot.waypoints = insertWaypoint(plot.waypoints, plot.waypoints.length, { lat, lon });
-  reroute();
+  scheduleReroute();
 }
 
 function setPlotMode(on) {
@@ -1332,6 +1370,7 @@ function setPlotMode(on) {
   $('findQuery').hidden = on;
   if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
   $('plotBar').hidden = !on;
+  $('crosshair').hidden = !on;
   if (startMarker) {
     if (on) map.removeLayer(startMarker);
     else startMarker.addTo(map);
@@ -1362,7 +1401,7 @@ function undoPlot() {
   plot.waypoints = last.waypoints;
   plot.closeLoop = last.closeLoop;
   $('plotLoop').setAttribute('aria-pressed', String(plot.closeLoop));
-  reroute();
+  scheduleReroute();
 }
 
 // --- saved routes ----------------------------------------------------------
@@ -1631,7 +1670,7 @@ function wireEvents() {
     pushHistory();
     plot.closeLoop = !plot.closeLoop;
     this.setAttribute('aria-pressed', String(plot.closeLoop));
-    reroute();
+    scheduleReroute();
   });
   $('saveRouteBtn').addEventListener('click', saveCurrentRoute);
   $('routeName').addEventListener('keydown', (e) => {
