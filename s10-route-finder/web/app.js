@@ -266,6 +266,91 @@ function updateSummary() {
   $('sumShape').textContent = $('shape').value === SHAPE_LOOP ? 'Loop' : 'Out and back';
 }
 
+// --- loading runner --------------------------------------------------------
+/* A four frame pixel run cycle, written as rows so the frames stay editable.
+ * '#' is a filled pixel on a 12 by 12 grid. */
+const RUNNER_FRAMES = [
+  ['.....##.....',
+   '.....##.....',
+   '............',
+   '..#######...',
+   '.#....##....',
+   '......##....',
+   '......##....',
+   '.....#..#...',
+   '....#....#..',
+   '...#......#.',
+   '..##.......#',
+   '............'],
+  ['.....##.....',
+   '.....##.....',
+   '............',
+   '...#####.#..',
+   '......##.#..',
+   '......##....',
+   '......##....',
+   '......##....',
+   '.....#.#....',
+   '.....#..#...',
+   '....##...#..',
+   '............'],
+  ['.....##.....',
+   '.....##.....',
+   '............',
+   '...#######..',
+   '....##....#.',
+   '......##....',
+   '......##....',
+   '.....#..#...',
+   '....#....#..',
+   '...#......#.',
+   '..#.......##',
+   '............'],
+  ['.....##.....',
+   '.....##.....',
+   '............',
+   '..#.#####...',
+   '..#..##.....',
+   '......##....',
+   '......##....',
+   '......##....',
+   '.....#.#....',
+   '....#..#....',
+   '...#...##...',
+   '............'],
+];
+
+function runnerElement() {
+  const svg = svgEl('svg', {
+    class: 'runner', viewBox: '0 0 12 12', 'shape-rendering': 'crispEdges', 'aria-hidden': 'true',
+  });
+  RUNNER_FRAMES.forEach((frame) => {
+    const g = svgEl('g', { fill: 'currentColor' });
+    frame.forEach((row, y) => {
+      [...row].forEach((cell, x) => {
+        if (cell === '#') g.appendChild(svgEl('rect', { x, y, width: 1, height: 1 }));
+      });
+    });
+    svg.appendChild(g);
+  });
+  return svg;
+}
+
+/* Shown while a search runs. Searches take around twenty seconds because the
+ * requests are deliberately spaced out, so the wait needs something honest to
+ * look at. */
+function showLoading(text) {
+  const div = document.createElement('div');
+  div.className = 'msg info loading';
+  div.id = 'loadingMsg';
+  div.setAttribute('role', 'status');
+  div.setAttribute('aria-live', 'polite');
+  const label = document.createElement('span');
+  label.textContent = text;
+  div.append(runnerElement(), label);
+  $('messages').appendChild(div);
+}
+
 // --- search ----------------------------------------------------------------
 function setBusy(state) {
   busy = state;
@@ -290,7 +375,7 @@ async function runSearch() {
 
   const shape = $('shape').value;
   setBusy(true);
-  message('info', `Generating and measuring candidate routes. Up to ${CONFIG.REQUEST_BUDGET} requests, `
+  showLoading(`Generating and measuring candidate routes. Up to ${CONFIG.REQUEST_BUDGET} requests, `
     + 'spaced out to stay inside the free tier, so give it half a minute.');
 
   const client = new OrsClient({ apiKey });

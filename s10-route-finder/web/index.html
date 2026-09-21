@@ -134,6 +134,20 @@
   .result-row .where { font-size: 13px; color: var(--muted); flex: none; }
   .result-row .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* --- loading runner --- */
+  .loading { display: flex; align-items: center; gap: 12px; }
+  .runner { width: 34px; height: 34px; flex: none; color: var(--accent); }
+  .runner g { opacity: 0; animation: runCycle .56s linear infinite; }
+  .runner g:nth-of-type(1) { animation-delay: 0s; }
+  .runner g:nth-of-type(2) { animation-delay: .14s; }
+  .runner g:nth-of-type(3) { animation-delay: .28s; }
+  .runner g:nth-of-type(4) { animation-delay: .42s; }
+  @keyframes runCycle { 0%, 24.9% { opacity: 1; } 25%, 100% { opacity: 0; } }
+  /* Standing still rather than vanishing when motion is turned down. */
+  @media (prefers-reduced-motion: reduce) {
+    .runner g:nth-of-type(1) { opacity: 1; }
+  }
+
   /* --- messages --- */
   .msg { padding: 10px 12px; border-radius: 8px; font-size: 13.5px; }
   .msg.error { background: var(--bad-bg); color: var(--bad); }
