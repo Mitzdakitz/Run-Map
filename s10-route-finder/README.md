@@ -32,15 +32,28 @@ using Private Browsing loses it, and the page tells you when it cannot save.
 
 ## Running it locally
 
-ES modules will not load from a `file://` URL, so use any static server:
+ES modules will not load from a `file://` URL, so use a static server. Use this
+one rather than a plain `http.server`, because browsers cache module files
+aggressively and will happily serve you yesterday's JavaScript while showing
+you today's HTML:
 
 ```bash
 cd s10-route-finder/web
-python3 -m http.server 8081
+python3 -c "
+import http.server, functools
+class H(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, max-age=0')
+        super().end_headers()
+http.server.test(HandlerClass=H, port=8081, bind='127.0.0.1')
+"
 ```
 
-Then open <http://127.0.0.1:8081>. Any Python 3 will do; nothing here needs a
-particular version.
+Then open <http://127.0.0.1:8081>. Any Python 3 will do.
+
+If you ever doubt whether you are looking at the current code, the version is
+printed at the bottom of Settings and matches `APP_VERSION` in
+`web/config.js`.
 
 ## Publishing it, and using it on an iPhone
 

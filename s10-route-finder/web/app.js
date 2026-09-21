@@ -1,6 +1,6 @@
 /* UI: map, search form, ranked cards, elevation profile.
  * All search logic lives in routefinder.js; this file only presents it. */
-import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
+import { APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 import {
   OrsClient, TerrainStore, estimateSeconds, formatDuration, geocode, gradientAt,
   gradientBand, longestClimb, parsePace, profile, reverseProfile, search, steepestWindow,
@@ -72,6 +72,7 @@ function boot() {
 
   // The controls are wired before the map, so a map failure cannot take the
   // whole interface down with it.
+  $('appVersion').textContent = APP_VERSION;
   buildClimbPresets();
   loadSettings();
   wireEvents();
