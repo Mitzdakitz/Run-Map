@@ -1,4 +1,8 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
+// Bumped whenever the app changes, and shown in Settings. If the version on
+// screen is not the one you expect, the browser is serving you cached files.
+export const APP_VERSION = '2026-09-21.6';
+
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
   ORS_BASE_URL: 'https://api.openrouteservice.org',
@@ -33,6 +37,27 @@ export const CONFIG = {
   ASCENT_THRESHOLD_M: 3,
   ELEVATION_SMOOTHING_WINDOW: 5,
 
+  // --- Elevation profile --------------------------------------------------
+  // Real elevation data is noisy at roughly 30 m posting, so gradient is
+  // averaged over a window before it is banded. Per-sample banding would be
+  // confetti rather than readable bands.
+  GRADIENT_WINDOW_M: 100,
+  // Band boundaries in per cent. Negative is descending.
+  GRADIENT_BANDS: [-6, -3, 3, 6, 10],
+
+  // --- Time estimate ------------------------------------------------------
+  // Only used when you have entered a flat pace. Naismith's walking rule works
+  // out at 6 s per metre of climb, which is far too slow for running, so this
+  // is a placeholder. Recalibrate it against your own runs, like the presets.
+  CLIMB_SECONDS_PER_METRE: 4,
+
+  // --- Map presentation ---------------------------------------------------
+  ROUTE_ARROWS: 4,
+
+  // --- Geocoding ----------------------------------------------------------
+  // Same key as directions, but a separate endpoint and a separate quota.
+  GEOCODE_RESULTS: 5,
+
   // --- Scoring ------------------------------------------------------------
   W_DIST: 0.5,
   W_ASC: 0.5,
@@ -46,6 +71,14 @@ export const CONFIG = {
   // A phone's local storage is about 5 MB. Each cell costs roughly 20 bytes,
   // so this cap leaves plenty of room and still covers a whole city.
   MAX_TERRAIN_POINTS: 150000,
+};
+
+// Browser storage keys.
+export const STORAGE = {
+  key: 's10.orsKey',
+  pace: 's10.pace',
+  starts: 's10.savedStarts',
+  startName: 's10.startName',
 };
 
 export const SHAPE_LOOP = 'loop';

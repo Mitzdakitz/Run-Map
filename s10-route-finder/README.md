@@ -32,15 +32,28 @@ using Private Browsing loses it, and the page tells you when it cannot save.
 
 ## Running it locally
 
-ES modules will not load from a `file://` URL, so use any static server:
+ES modules will not load from a `file://` URL, so use a static server. Use this
+one rather than a plain `http.server`, because browsers cache module files
+aggressively and will happily serve you yesterday's JavaScript while showing
+you today's HTML:
 
 ```bash
 cd s10-route-finder/web
-python3 -m http.server 8081
+python3 -c "
+import http.server, functools
+class H(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, max-age=0')
+        super().end_headers()
+http.server.test(HandlerClass=H, port=8081, bind='127.0.0.1')
+"
 ```
 
-Then open <http://127.0.0.1:8081>. Any Python 3 will do; nothing here needs a
-particular version.
+Then open <http://127.0.0.1:8081>. Any Python 3 will do.
+
+If you ever doubt whether you are looking at the current code, the version is
+printed at the bottom of Settings and matches `APP_VERSION` in
+`web/config.js`.
 
 ## Publishing it, and using it on an iPhone
 
@@ -58,18 +71,47 @@ Screen** for an icon that opens without Safari's chrome.
 
 ## Using it
 
-1. Tap the map to set your start. Starts outside the Sheffield bounding box in
-   `web/config.js` are rejected.
-2. Set distance (1 to 30 km), pick Low / Medium / High climb or type exact
-   metres of ascent, and choose Loop or Out and back.
-3. Press Search. Each search spends up to `REQUEST_BUDGET` (default 12) routing
-   requests and takes around 20 seconds, because requests are spaced out to
-   stay under the free tier's 40 per minute.
-4. Cards are ranked best first, each showing distance, ascent, descent, the
-   error against each target, and whether it is within tolerance (5% on
-   distance, 15% on ascent). Tap a card to draw that route.
-5. Search again spends a fresh budget with new seeds and keeps the previous
-   results in the list, so you can compare.
+1. **Set your start.** Tap the map, drag the pin, search for a place by name,
+   or press Locate to use where you are. Starts outside the Sheffield bounding
+   box in `web/config.js` are rejected. Save the starts you use often and they
+   become one-tap chips.
+2. **Set your targets.** Distance (1 to 30 km), Low / Medium / High climb or
+   exact metres of ascent, and Loop or Out and back. The one-line summary at
+   the top always shows what you are about to search for.
+3. **Press Search.** Each search spends up to `REQUEST_BUDGET` (default 12)
+   routing requests and takes around 20 seconds, because requests are spaced
+   out to stay under the free tier's 40 per minute.
+4. **Find your start.** The chequered disc marks where the route begins and
+   ends, which on a loop is otherwise invisible because the line closes on
+   itself. Drag it to move your start. On an out and back, a second marker
+   shows where you turn round and how far in that is.
+5. **Compare.** All the candidates are drawn on the map at once, the selected
+   one solid with direction arrows and the rest faint. Tap either a card or a
+   faint line to switch. Cards are ranked best first and share one elevation
+   scale, so their sparklines are genuinely comparable rather than each
+   stretched to fill its own box.
+6. **Inspect.** The detail panel gives the longest sustained climb and the
+   steepest 200 m, which say more about whether a route is nasty than the
+   total ascent does. The elevation profile below it is coloured by gradient:
+   blue where you descend, warm where you climb. Drag across it and a marker
+   follows the route on the map, so you can see exactly where the hill is.
+7. **Reverse direction** to see the same route run the other way. The distance
+   does not change but the shape of the effort does, which in Sheffield is most
+   of the decision.
+8. **Search again** spends a fresh budget with new seeds and keeps the previous
+   results below, so you can compare across searches.
+
+### Estimated times
+
+Times appear only once you have entered your average flat pace, under Edit.
+Leave it blank and no time is shown anywhere, because a time derived from a
+pace nobody gave is a fabrication.
+
+The model is flat pace plus `CLIMB_SECONDS_PER_METRE` (default 4) per metre of
+ascent. Naismith's walking rule works out at 6 s per metre, which is far too
+slow for running, so 4 is a placeholder. Recalibrate it the same way as the
+climb presets: run a route the app produced, compare its estimate against your
+actual time, and adjust.
 
 ## Recalibrating the climb presets
 
@@ -92,6 +134,11 @@ Other knobs worth touching, all in `web/config.js`:
 
 - `ASCENT_THRESHOLD_M` (default 3) how much cumulative gain is needed before a
   climb counts. Raise it if reported ascent looks inflated against your watch.
+- `CLIMB_SECONDS_PER_METRE` (default 4) the climb penalty in the time estimate.
+- `GRADIENT_WINDOW_M` (default 100) the window gradient is averaged over before
+  it is banded for the profile colouring. Lower it for a twitchier profile,
+  raise it for a calmer one.
+- `GRADIENT_BANDS` the gradient percentages the six colour bands split at.
 - `W_DIST` and `W_ASC` (default 0.5 each) how the score trades distance error
   against ascent error. Raise `W_ASC` if hitting the climb matters more.
 - `DISTANCE_TOLERANCE` and `ASCENT_TOLERANCE` what counts as a match.
@@ -130,10 +177,11 @@ cd s10-route-finder
 node --test web-tests/*.test.js
 ```
 
-31 tests, no dependencies to install, no network access. They cover the ascent
+55 tests, no dependencies to install, no network access. They cover the ascent
 hysteresis against noisy data, the terrain store and its storage failure modes,
-the request budget and rate limit handling, both generation shapes, and the
-scoring and tolerance rules.
+the request budget and rate limit handling, both generation shapes, the scoring
+and tolerance rules, the elevation profile and its distance scaling, gradient
+smoothing and banding, the climb statistics, pace parsing and the place search.
 
 ## Known limits
 
@@ -164,5 +212,13 @@ scoring and tolerance rules.
   own web map works this way, so it should be fine, but if a search fails with
   a CORS error in the browser console, that is the cause, and this approach
   cannot work without a proxy or a server in front of it.
+- **Gradient colouring is banded, not continuous.** Six bands, split at the
+  percentages in `GRADIENT_BANDS`. Gradient is averaged over 100 m first,
+  because real elevation data is noisy at roughly 30 m posting and per-sample
+  banding would be visual noise rather than information.
+- **Place search has its own quota**, separate from routing, so it never eats
+  the search budget. It is constrained to the Sheffield bounding box.
+- **Saved starts and your pace live in this browser only**, like the key and
+  the terrain store. Nothing syncs between devices.
 - **No accounts, no saved routes, no GPX export.** Plan a route, look at it,
   go for your run.
