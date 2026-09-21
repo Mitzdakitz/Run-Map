@@ -1,12 +1,16 @@
-# S10 route finder
+# Contours
 
-A personal route planner for running around Sheffield S10, where climb matters
-as much as distance. Give it a start point, a distance and an amount of ascent;
-it generates candidate routes, measures what each one actually is, and shows
-you the closest three on a map.
+A route planner for running, where climb matters as much as distance. Give it a
+start point, a distance and an amount of ascent; it generates candidate routes,
+measures what each one actually is, and shows you the closest three. Or draw
+your own and have it tell you honestly what you have drawn.
 
 It runs entirely in the browser. There is no server, no build step and no
-framework: four files, Leaflet from a CDN, and OpenRouteService for routing.
+framework: four files, Leaflet from a CDN, OpenRouteService for routing, and
+free elevation tiles for the shape of the ground.
+
+The folder is still called `s10-route-finder`, from when this only covered
+Sheffield S10. The app works anywhere.
 
 ## Why it works the way it does
 
@@ -40,7 +44,7 @@ you today's HTML:
 ```bash
 cd s10-route-finder/web
 python3 -c "
-import http.server, functools
+import http.server
 class H(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store, max-age=0')
@@ -58,7 +62,7 @@ printed at the bottom of Settings and matches `APP_VERSION` in
 ## Publishing it, and using it on an iPhone
 
 `.github/workflows/pages.yml` publishes `s10-route-finder/web` to GitHub Pages
-on every push to `main`, gated on the engine tests so a broken build is never
+on every push to `main`, gated on the tests so a broken build is never
 published. It needs two things set once:
 
 1. The repository must be public, or on a plan that allows Pages from private
@@ -69,39 +73,81 @@ The app then lives at `https://<user>.github.io/Run-Map/`. On the iPhone, open
 that in Safari, paste your key into Settings, then Share, then **Add to Home
 Screen** for an icon that opens without Safari's chrome.
 
-## Using it
+## The two modes
+
+The switch at the top of the page chooses between them. They are separate
+workspaces: switching clears the map and puts the other mode's work away, and
+switching back brings it out again unchanged. Neither switch costs a request.
+
+### Find me a route
 
 1. **Set your start.** Tap the map, drag the pin, search for a place by name,
-   or press Locate to use where you are. Starts outside the Sheffield bounding
-   box in `web/config.js` are rejected. Save the starts you use often and they
+   or press Locate to use where you are. Save the starts you use often and they
    become one-tap chips.
 2. **Set your targets.** Distance (1 to 30 km), Low / Medium / High climb or
    exact metres of ascent, and Loop or Out and back. The one-line summary at
    the top always shows what you are about to search for.
-3. **Press Search.** Each search spends up to `REQUEST_BUDGET` (default 12)
-   routing requests and takes around 20 seconds, because requests are spaced
-   out to stay under the free tier's 40 per minute.
+3. **Press Search.** Each search first reads the shape of the ground around
+   your start from elevation tiles, which costs no routing requests, then
+   spends up to `REQUEST_BUDGET` (default 12) routing requests. It takes around
+   20 seconds, because requests are spaced out to stay under the free tier's
+   40 per minute.
 4. **Find your start.** The chequered disc marks where the route begins and
    ends, which on a loop is otherwise invisible because the line closes on
    itself. Drag it to move your start. On an out and back, a second marker
    shows where you turn round and how far in that is.
-5. **Compare.** All the candidates are drawn on the map at once, the selected
-   one solid with direction arrows and the rest faint. Tap either a card or a
-   faint line to switch. Cards are ranked best first and share one elevation
-   scale, so their sparklines are genuinely comparable rather than each
-   stretched to fill its own box.
+5. **Compare.** All the candidates are drawn at once, the selected one solid
+   with direction arrows and the rest faint. Tap either a card or a faint line
+   to switch. Cards are ranked best first and share one elevation scale, so
+   their sparklines are genuinely comparable rather than each stretched to fill
+   its own box.
 6. **Inspect.** The detail panel gives the longest sustained climb and the
-   steepest 200 m, which say more about whether a route is nasty than the
-   total ascent does. The elevation profile below it is coloured by gradient:
-   blue where you descend, warm where you climb. Drag across it and a marker
-   follows the route on the map, so you can see exactly where the hill is.
+   steepest 200 m, which say more about whether a route is nasty than the total
+   ascent does. The elevation profile below it is coloured by gradient: blue
+   where you descend, warm where you climb. Drag across it and a marker follows
+   the route on the map, so you can see exactly where the hill is.
 7. **Reverse direction** to see the same route run the other way. The distance
-   does not change but the shape of the effort does, which in Sheffield is most
-   of the decision.
+   does not change but the shape of the effort does, which in hilly country is
+   most of the decision.
 8. **Search again** spends a fresh budget with new seeds and keeps the previous
    results below, so you can compare across searches.
 
-### Estimated times
+### Plot my own
+
+Drag the map so the crosshair sits where you want to go, then let go: the point
+lands there, snapped to real paths by the routing service, so the line stays
+something you could actually run and the elevation is measured rather than
+guessed. Your finger never covers the spot you are aiming at, which is what
+made tapping guesswork on a phone. Tapping the map still works, which is what a
+mouse wants.
+
+- **Drag a point** to move it. **Tap the line** to insert one where you tapped.
+  **Tap a point** to remove it.
+- **Close the loop** returns the route to its first point.
+- **Undo** steps back through your edits.
+- **The padlock** suspends placing, so you can look further along without
+  committing to going there. Moving, inserting and removing points all still
+  work while it is off.
+
+Points appear the instant you release, but the routing request behind them
+waits `PLOT_ROUTE_DEBOUNCE_MS`, so several points placed in quick succession
+cost one request rather than one each. Plotting has its own budget
+(`PLOT_BUDGET`, default 60) separate from a search's, because editing is the
+most request-hungry thing the app can do.
+
+### Saved routes
+
+Either kind of route can be named and saved. Saved routes live in that browser
+only, up to `SAVED_ROUTES_LIMIT` (default 60). A route that was plotted by hand
+comes back editable, with its points intact; a route from a search comes back
+to look at.
+
+Coordinates are rounded to about a metre and stored flat, which roughly halves
+what a route costs to keep. Every save reports whether it worked: browser
+storage fills up and refuses silently, and a save button that quietly does
+nothing is worse than one that says it could not.
+
+## Estimated times
 
 Times appear only once you have entered your average flat pace, under Edit.
 Leave it blank and no time is shown anywhere, because a time derived from a
@@ -115,6 +161,19 @@ actual time, and adjust.
 
 ## Recalibrating the climb presets
 
+**This is the most important unfinished thing in the app.** Every route
+generated so far has overshot its climb target by 36 to 53%. There are two
+explanations, they fit the evidence equally well, and they have opposite fixes:
+
+- the terrain genuinely delivers more ascent per km than the presets assume, so
+  `CLIMB_PRESETS` is set too low; or
+- the ascent measurement inflates, so the hysteresis in `ascentDescent` needs
+  changing.
+
+Neither has been applied, because guessing wrong would bake the error into
+every number the app reports. What settles it is one comparison: run a route
+the app produced and put its reported climb next to what your watch recorded.
+
 `CLIMB_PRESETS` in `web/config.js` maps each preset to **metres of ascent per
 km**:
 
@@ -123,52 +182,81 @@ CLIMB_PRESETS: { low: 5, medium: 15, high: 30 },
 ```
 
 Target ascent = preset value x distance in km. So Medium over 8 km asks for
-120 m. These three numbers are placeholders. To recalibrate, take a handful of
-runs you already know around S10, work out metres of ascent per km for each
-(your watch's climb figure divided by the distance), and set the presets to the
-values that match how a Low, Medium or High day actually feels to you. A flat
-canal run is likely 5 or under; a Rivelin or Porter valley loop with real
-climbing is likely 25 to 40.
+120 m. To recalibrate, take a handful of runs you already know, work out metres
+of ascent per km for each (your watch's climb figure divided by the distance),
+and set the presets to the values that match how a Low, Medium or High day
+actually feels to you. A flat canal run is likely 5 or under; a valley loop
+with real climbing is likely 25 to 40.
 
-Other knobs worth touching, all in `web/config.js`:
+If instead the measurement is at fault, `ASCENT_THRESHOLD_M` (default 3) is the
+knob: it is how far the elevation series must reverse before a climb is banked,
+which is what stops noise accumulating into fictional ascent. Raise it if
+reported climb looks consistently high against your watch.
 
-- `ASCENT_THRESHOLD_M` (default 3) how much cumulative gain is needed before a
-  climb counts. Raise it if reported ascent looks inflated against your watch.
-- `CLIMB_SECONDS_PER_METRE` (default 4) the climb penalty in the time estimate.
-- `GRADIENT_WINDOW_M` (default 100) the window gradient is averaged over before
-  it is banded for the profile colouring. Lower it for a twitchier profile,
-  raise it for a calmer one.
-- `GRADIENT_BANDS` the gradient percentages the six colour bands split at.
-- `W_DIST` and `W_ASC` (default 0.5 each) how the score trades distance error
-  against ascent error. Raise `W_ASC` if hitting the climb matters more.
-- `DISTANCE_TOLERANCE` and `ASCENT_TOLERANCE` what counts as a match.
-- `OUT_AND_BACK_FACTOR` (default 0.38) how far out the turning point is placed,
-  as a fraction of total target distance. See the known limits below.
-- `REQUEST_BUDGET` how many routing requests a single search may spend.
-- `ORS_PROFILE` (default `foot-walking`).
+## Where elevation comes from
 
-## How the terrain store improves results over time
+Two sources, doing two different jobs.
 
-Every OpenRouteService response is 3D, so every route you generate comes with
-thousands of elevation points at no extra cost. Those are deduplicated onto a
-roughly 50 m grid and kept in local storage. Only the elevation is stored: the
-grid cell key encodes the position, which keeps a whole city inside a phone's
-storage budget.
+**OpenRouteService** returns 3D geometry with every route, and that is what the
+app reports. Every distance and climb figure you see comes from there.
 
-The store is then used to aim waypoints. For a high-ascent target it picks
-waypoints whose stored elevation differs most from the start, which is what
-sends a route up towards Crookes, Ringinglow or the Rivelin valley sides
-instead of along the flat. For a low-ascent target it picks the points closest
-in elevation to the start, keeping to the contour.
+**Terrarium elevation tiles** on AWS Open Data, free and without a key, are
+used to aim waypoints and to draw the hills layer. One tile carries tens of
+thousands of samples against the few hundred a single route donates, so the app
+can know the shape of an area before it has ever run there. Before this, climb
+targeting could only aim at ground earlier routes had crossed, which made your
+first search anywhere your worst one.
 
-On a cold start the store is empty and waypoints are placed by bearing alone,
-which is no better than the naive approach; the app says so in a warning. After
-a few searches around the same start, the store has real coverage and the
-ascent-correction pass has something to aim at. Clear terrain store in Settings
-resets it.
+They are deliberately not interchangeable. The tiles are a blended global
+product: they read peaks low, Higger Tor by about 50 m and Win Hill by about
+57 m, and they include sea floor, so open water reads below zero. Moving the
+reported figures onto them would change every number on screen without evidence
+that it improved one.
 
-Note that each browser builds its own store. The phone and the laptop do not
-share, so using both means each improves at its own pace.
+Tile samples are folded into the same terrain store as route elevation,
+deduplicated onto a grid whose spacing is latitude-aware, and capped at
+`MAX_TERRAIN_POINTS` (default 80,000, about 1.6 MB) so the store cannot crowd
+out your saved routes. When it fills, the oldest fifth is dropped, so it
+follows you as you move rather than freezing on the first area it saw.
+
+Each browser builds its own store. The phone and the laptop do not share.
+**Clear terrain store** in Settings resets it.
+
+## When something goes wrong
+
+A failed request tells the page almost nothing. An exhausted allowance, a
+rejected key and a dropped connection all arrive as the same bare failure,
+because an error response comes back without the headers a browser needs. On a
+phone there is no Network tab to fall back on.
+
+**Test the connection** in Settings sends three requests chosen to fail in
+different ways: place search, routing with a deliberately invalid key, and
+routing with yours. The middle one carries the argument. If a knowingly wrong
+key comes back readable, then refusals are visible from your device, so a
+failure that is not readable cannot be one.
+
+## Tuning
+
+Everything lives in `web/config.js`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `REQUEST_BUDGET` | 12 | routing requests one search may spend |
+| `PLOT_BUDGET` | 60 | routing requests one plotting session may spend |
+| `CLIMB_PRESETS` | 5 / 15 / 30 | metres of ascent per km, per preset. Placeholders |
+| `ASCENT_THRESHOLD_M` | 3 | how far the profile must reverse before a climb is banked |
+| `CLIMB_SECONDS_PER_METRE` | 4 | the climb penalty in the time estimate. A placeholder |
+| `W_DIST` / `W_ASC` | 0.5 / 0.5 | how the score trades distance error against ascent error |
+| `DISTANCE_TOLERANCE` / `ASCENT_TOLERANCE` | 0.05 / 0.15 | what counts as a match |
+| `OUT_AND_BACK_FACTOR` | 0.38 | how far out the turning point goes. See the limits below |
+| `GRADIENT_WINDOW_M` | 100 | the window gradient is averaged over before banding |
+| `GRADIENT_BANDS` | -6 -3 3 6 10 | the gradient percentages the six colour bands split at |
+| `TERRAIN_TILE_ZOOM` | 12 | the finest zoom that carries real detail. Higher is upsampled |
+| `TERRAIN_TILE_SAMPLE_M` | 100 | how finely tiles are read into the store |
+| `MAX_TERRAIN_POINTS` | 80000 | the cap on the terrain store |
+| `SAVED_ROUTES_LIMIT` | 60 | how many routes a browser will hold |
+| `PLOT_PAN_THRESHOLD_PX` | 24 | a shorter pan is a wobble, not an aim, and places nothing |
+| `ORS_PROFILE` | `foot-walking` | the routing profile |
 
 ## Tests
 
@@ -177,21 +265,25 @@ cd s10-route-finder
 node --test web-tests/*.test.js
 ```
 
-55 tests, no dependencies to install, no network access. They cover the ascent
-hysteresis against noisy data, the terrain store and its storage failure modes,
-the request budget and rate limit handling, both generation shapes, the scoring
-and tolerance rules, the elevation profile and its distance scaling, gradient
-smoothing and banding, the climb statistics, pace parsing and the place search.
+128 tests, no dependencies to install, no network access. They cover the ascent
+hysteresis against noisy data, the terrain store at five latitudes from the
+equator to northern Scotland, its eviction under a full store and its lookup
+cost, the request budget and rate limit handling, both generation shapes, the
+scoring and tolerance rules, the elevation profile and its distance scaling,
+gradient smoothing and banding, the climb statistics, pace parsing, the place
+search, hand-plotted routes and their editing, the saved route library and its
+storage failures, the connection diagnosis in every combination of outcomes,
+and the elevation tile decoding, pinned against seven real pixels read out of
+the live service.
 
 ## Known limits
 
-- **The first few searches are weak.** The terrain store needs data before it
-  can aim anything. Expect the ascent-correction pass to be guessing until you
-  have run several searches from the same area.
+- **The climb presets are uncalibrated**, as above. This is the one that
+  affects every number the app gives you.
 - **`round_trip.length` is a hint, not a contract.** The ORS docs say so
-  explicitly. On a hilly, footpath-heavy area like S10, round trips regularly
-  come back 10 to 20% off the requested length, which is exactly why the app
-  measures and ranks rather than trusting the request.
+  explicitly. On hilly, footpath-heavy ground, round trips regularly come back
+  10 to 20% off the requested length, which is exactly why the app measures and
+  ranks rather than trusting the request.
 - **Expect outside-tolerance results.** 5% on distance is tight. When nothing
   meets both tolerances the app still returns the best three, clearly flagged
   with how far off they are. That is the tool being honest, not failing.
@@ -199,26 +291,22 @@ smoothing and banding, the climb statistics, pace parsing and the place search.
   point at 0.38 x the total target distance in a straight line, but real paths
   are not straight, so the routed leg tends to come back longer than half the
   target. If out-and-back results consistently overshoot, try 0.30.
-- **Ascent is computed from ORS elevation data**, not from a survey. It is
-  smoothed and hysteresis-filtered to behave like a running watch, but it will
-  not match your watch exactly, and two watches do not match each other either.
-- **The request cache is per session.** Route geometries are large and local
-  storage is limited, so repeating a search in a new tab costs requests again.
-- **Free tier limits.** 40 directions requests per minute (HTTP 429) and 2000
-  per day (HTTP 403). Both are reported in plain English in the app and stop
-  the search rather than hammering the service. Verify the numbers against your
-  own account page and correct them in `web/config.js` if they differ.
-- **It depends on OpenRouteService permitting direct browser requests.** Their
-  own web map works this way, so it should be fine, but if a search fails with
-  a CORS error in the browser console, that is the cause, and this approach
-  cannot work without a proxy or a server in front of it.
-- **Gradient colouring is banded, not continuous.** Six bands, split at the
-  percentages in `GRADIENT_BANDS`. Gradient is averaged over 100 m first,
-  because real elevation data is noisy at roughly 30 m posting and per-sample
-  banding would be visual noise rather than information.
+- **Plot mode places a point every time you release a pan.** That is
+  deliberate, and it means you cannot look around without leaving points
+  behind. The padlock is the answer; Undo is the other one.
+- **Elevation tiles are a blended global product**, not a survey. Peaks read
+  low and open water reads below zero. They aim waypoints and draw hills; they
+  are not what the app reports.
+- **The request cache is per session.** Route geometries are large, so
+  repeating a search in a new tab costs requests again.
+- **Free tier limits.** 40 routing requests per minute (HTTP 429) and 2000 per
+  day (HTTP 403). Both are reported in plain English and stop the search rather
+  than hammering the service. Verify the numbers against your own account page
+  and correct them in `web/config.js` if they differ.
 - **Place search has its own quota**, separate from routing, so it never eats
-  the search budget. It is constrained to the Sheffield bounding box.
-- **Saved starts and your pace live in this browser only**, like the key and
-  the terrain store. Nothing syncs between devices.
-- **No accounts, no saved routes, no GPX export.** Plan a route, look at it,
-  go for your run.
+  the search budget. Results are biased towards wherever the map is looking
+  rather than restricted to it.
+- **Everything is per browser.** The key, your pace, saved starts, saved routes
+  and the terrain store all live in one browser and nothing syncs between
+  devices.
+- **No accounts, no GPX export.** Plan a route, look at it, go for your run.
