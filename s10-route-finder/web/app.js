@@ -1185,8 +1185,13 @@ function addPlotPoint(lat, lon) {
 
 function setPlotMode(on) {
   plot.active = on;
-  $('plotBtn').setAttribute('aria-pressed', String(on));
-  $('plotBtn').textContent = on ? 'Stop plotting' : 'Plot your own';
+  $('modeFind').setAttribute('aria-pressed', String(!on));
+  $('modePlot').setAttribute('aria-pressed', String(on));
+  $('modeFind').classList.toggle('on', !on);
+  $('modePlot').classList.toggle('on', on);
+  // The targets only govern a search, so they go away when nothing is searching.
+  $('findQuery').hidden = on;
+  if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
   $('plotBar').hidden = !on;
   if (startMarker) {
     if (on) map.removeLayer(startMarker);
@@ -1478,7 +1483,8 @@ function wireEvents() {
 
   $('diagnose').addEventListener('click', runDiagnosis);
 
-  $('plotBtn').addEventListener('click', () => setPlotMode(!plot.active));
+  $('modeFind').addEventListener('click', () => setPlotMode(false));
+  $('modePlot').addEventListener('click', () => setPlotMode(true));
   $('plotDone').addEventListener('click', () => setPlotMode(false));
   $('plotClear').addEventListener('click', clearPlot);
   $('plotUndo').addEventListener('click', undoPlot);

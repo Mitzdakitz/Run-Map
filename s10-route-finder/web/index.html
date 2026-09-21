@@ -289,6 +289,28 @@
   .map-panel #map { height: 36vh; transition: height 160ms ease; }
   .map-panel.compact #map { height: 19vh; min-height: 140px; }
 }
+/* --- choosing how to make a route --- */
+.modes {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  padding: 8px; background: var(--sunken);
+  border-bottom: 1px solid var(--line-soft); border-radius: 10px 10px 0 0;
+}
+.mode {
+  display: block; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: 8px; font: inherit; font-weight: 650;
+  color: var(--ink); background: transparent; border: 1px solid transparent;
+}
+.mode span {
+  display: block; margin-top: 2px;
+  font-size: 12px; font-weight: 400; color: var(--muted);
+}
+.mode.on {
+  background: var(--surface); border-color: var(--line); box-shadow: var(--shadow);
+}
+.mode:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+@media (max-width: 420px) {
+  .modes { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -296,7 +318,17 @@
   <h1>Run Map</h1>
 
   <section class="panel">
-    <div class="query">
+    <div class="modes" role="group" aria-label="How to make a route">
+      <button type="button" id="modeFind" class="mode on" aria-pressed="true">
+        Find me a route
+        <span>from a distance and a climb</span>
+      </button>
+      <button type="button" id="modePlot" class="mode" aria-pressed="false">
+        Plot my own
+        <span>tap the map, point by point</span>
+      </button>
+    </div>
+    <div class="query" id="findQuery">
       <button class="terms-summary" type="button" id="editSearch" aria-expanded="false" aria-controls="searchPanel">
         <span id="sumStart">Default start</span><span class="sep">/</span>
         <span class="num" id="sumDistance">5 km</span><span class="sep">/</span>
@@ -360,7 +392,6 @@
         </div>
       </div>
       <div class="map-tools">
-        <button class="chip" type="button" id="plotBtn" aria-pressed="false">Plot your own</button>
         <button class="chip" type="button" id="mapSizeBtn" aria-pressed="false">Shrink map</button>
       </div>
       <div class="plot-bar" id="plotBar" hidden>
@@ -369,7 +400,7 @@
           <button class="chip" type="button" id="plotLoop" aria-pressed="false">Close the loop</button>
           <button class="chip" type="button" id="plotUndo">Undo</button>
           <button class="chip" type="button" id="plotClear">Clear</button>
-          <button class="chip" type="button" id="plotDone">Done</button>
+          <button class="chip" type="button" id="plotDone">Finish</button>
         </div>
         <p class="hint" id="plotHelp" style="margin:0">
           Tap the map to add a point, drag a point to move it, tap the line to add one in
