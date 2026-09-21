@@ -451,6 +451,7 @@
         </div>
       </div>
       <div class="map-tools">
+        <button class="chip" type="button" id="terrainBtn" aria-pressed="false">Show hills</button>
         <button class="chip" type="button" id="mapSizeBtn" aria-pressed="false">Shrink map</button>
       </div>
       <div class="plot-bar" id="plotBar" hidden>
@@ -477,10 +478,9 @@
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="resultsPanel">
       <div class="head">
         <h2 id="resultsHeading">Results</h2>
-        <button class="small" type="button" id="terrainBtn" aria-pressed="false">Show terrain samples</button>
       </div>
       <div class="body">
         <div class="cards" id="cards"></div>

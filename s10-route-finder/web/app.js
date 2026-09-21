@@ -42,7 +42,16 @@ let searchCount = 0;
 let busy = false;
 let reversed = false;
 
+/* What is on screen now. The two modes are separate workspaces that happen to
+ * share one set of panels, so this holds whichever one is showing and the
+ * other is kept in the stash below. Mixing them, which is what pushing a
+ * plotted route into the search results amounted to, meant switching modes
+ * left the other mode's work on the map. */
 const groups = [];           // newest first: { number, target, candidates, profiles }
+const stash = {
+  find: { groups: [], selected: { group: 0, route: 0 } },
+  plot: { groups: [], selected: { group: 0, route: 0 } },
+};
 let selected = { group: 0, route: 0 };
 let domain = null;           // shared chart scale for the selected group
 let activeProfile = [];      // the selected route, in the direction being shown
@@ -132,6 +141,7 @@ function boot() {
   buildClimbPresets();
   loadSettings();
   wireEvents();
+  renderPlotLock();
   updateSummary();
   refreshTerrainCount();
   renderSaved();
@@ -732,6 +742,28 @@ function card(candidate, group, dom, gi, ri) {
 }
 
 // --- selection -------------------------------------------------------------
+/* Redraws every panel from whatever is in `groups`, including when that is
+ * nothing, which is what switching modes needs. */
+function refreshDisplay({ fit = false } = {}) {
+  if (!groups.length) {
+    selected = { group: 0, route: 0 };
+    activeProfile = [];
+    domain = null;
+    reversed = false;
+    $('reverseBtn').setAttribute('aria-pressed', 'false');
+    $('dirPill').hidden = true;
+    renderCards();
+    drawRoutes(false);
+    drawPlot();
+    drawChart();
+    refreshDetail();
+    return;
+  }
+  const gi = Math.min(selected.group, groups.length - 1);
+  const ri = Math.min(selected.route, groups[gi].candidates.length - 1);
+  selectRoute(gi, ri, { fit });
+}
+
 function selectRoute(gi, ri, { fit = false } = {}) {
   selected = { group: gi, route: ri };
   reversed = false;
@@ -742,6 +774,7 @@ function selectRoute(gi, ri, { fit = false } = {}) {
   activeProfile = groups[gi].profiles[ri];
   renderCards();
   drawRoutes(fit);
+  drawPlot();
   drawChart();
   refreshDetail();
 }
@@ -858,7 +891,7 @@ let scaleY = () => 0;
 function drawChart() {
   const chart = $('chart');
   const points = shownProfile();
-  if (!points.length) return;
+  if (!points.length) { chart.textContent = ''; return; }
 
   chartWidth = Math.max(280, chart.clientWidth || chart.parentNode.clientWidth || 560);
   chart.setAttribute('viewBox', `0 0 ${chartWidth} ${CHART_H}`);
@@ -996,11 +1029,18 @@ function hideCursor() {
 // --- detail ----------------------------------------------------------------
 function refreshDetail() {
   const group = groups[selected.group];
+  if (!group || !group.candidates[selected.route]) {
+    $('detailPanel').hidden = true;
+    $('dirPill').hidden = true;
+    return;
+  }
   const candidate = group.candidates[selected.route];
   const points = shownProfile();
   $('detailPanel').hidden = false;
 
-  $('detailTitle').textContent = `Route ${selected.route + 1} in detail`;
+  $('detailTitle').textContent = group.plotted
+    ? 'Your route in detail'
+    : `Route ${selected.route + 1} in detail`;
   $('mDist').textContent = `${(candidate.distanceM / 1000).toFixed(2)} km`;
   $('mDistErr').textContent = `${candidate.distanceErrorM > 0 ? '+' : ''}`
     + `${(candidate.distanceErrorM / 1000).toFixed(2)} km on target`;
@@ -1179,6 +1219,20 @@ async function toggleTerrain(on) {
 
   hills = makeHillsLayer();
   hills.domain = hillDomain() || { lo: 0, hi: 400 };
+  /* The harvest above only notices an outage when it actually asks for a tile,
+   * and it asks for none it has already read. So the drawing has to speak for
+   * itself: without this, a service that went down after a successful search
+   * would paint nothing and explain nothing. */
+  let warned = false;
+  if (hills.on) {
+    hills.on('tileerror', () => {
+      if (warned) return;
+      warned = true;
+      message('warn', 'Some elevation tiles would not load, so the hills are patchy '
+        + 'or missing. They come from a free service with no key, which is '
+        + 'occasionally unavailable. Nothing else is affected.');
+    });
+  }
   hills.addTo(map);
   refreshTerrainCount();
 }
@@ -1214,7 +1268,9 @@ function clearPlotLayers() {
 function drawPlot() {
   if (!map) return;
   clearPlotLayers();
-  if (!plot.active && !plot.waypoints.length) return;
+  // Nothing of a plotted route is drawn outside plot mode. Leaving it behind is
+  // what made switching modes feel like the map had not been cleared.
+  if (!plot.active) return;
 
   if (plot.route && plot.route.coords.length) {
     const latLngs = plot.route.coords.map((c) => [c[1], c[0]]);
@@ -1377,14 +1433,16 @@ function showPlotAsResult() {
     strategy: 'plotted by hand',
     shape: 'plotted',
   });
-  groups.unshift({
+  // Replaces rather than accumulates: there is one route being drawn, and every
+  // edit is the same route again, not another candidate to compare against.
+  groups.length = 0;
+  groups.push({
     number: 0,
     target,
     plotted: true,
     candidates: [candidate],
     profiles: [profile(candidate.coords, candidate.distanceM)],
   });
-  if (groups.length > 8) groups.pop();
   selected = { group: 0, route: 0 };
   selectRoute(0, 0, { fit: false });
 }
@@ -1396,6 +1454,16 @@ function addPlotPoint(lat, lon) {
 }
 
 function setPlotMode(on) {
+  if (plot.active === on) return;
+
+  /* Each mode keeps its own workspace. Leaving one puts its routes away;
+   * arriving at the other takes its routes back out, so searching, plotting,
+   * and going back to your search results loses nothing. */
+  const leaving = plot.active ? 'plot' : 'find';
+  const arriving = on ? 'plot' : 'find';
+  stash[leaving].groups = groups.slice();
+  stash[leaving].selected = { ...selected };
+
   plot.active = on;
   $('modeFind').setAttribute('aria-pressed', String(!on));
   $('modePlot').setAttribute('aria-pressed', String(on));
@@ -1403,6 +1471,7 @@ function setPlotMode(on) {
   $('modePlot').classList.toggle('on', on);
   // The targets only govern a search, so they go away when nothing is searching.
   $('findQuery').hidden = on;
+  $('resultsPanel').hidden = on;
   if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
   $('plotBar').hidden = !on;
   $('crosshair').hidden = !on;
@@ -1420,7 +1489,15 @@ function setPlotMode(on) {
     $('budgetText').textContent = 'Tap the map to set your start';
     $('quotaFill').style.width = '0';
   }
-  drawPlot();
+  groups.length = 0;
+  groups.push(...stash[arriving].groups);
+  selected = { ...stash[arriving].selected };
+
+  // Any in-flight edit belongs to the mode being left.
+  if (rerouteTimer) { clearTimeout(rerouteTimer); rerouteTimer = null; }
+
+  // Bring the restored routes back into view: they may be somewhere else entirely.
+  refreshDisplay({ fit: groups.length > 0 });
   renderPlotStats();
 }
 
