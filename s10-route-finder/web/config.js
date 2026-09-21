@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-22.2';
+export const APP_VERSION = '2026-09-22.3';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -72,8 +72,31 @@ export const CONFIG = {
   TERRAIN_SEARCH_RADIUS_FRACTION: 0.35,
   // A phone's local storage is about 5 MB. Each cell costs roughly 20 bytes,
   // so this cap leaves plenty of room and still covers a whole city.
-  MAX_TERRAIN_POINTS: 150000,
+  /* Lowered from 150,000 when elevation started arriving by the tile. Route
+   * scavenging added a few hundred cells at a time, so a large cap cost
+   * nothing; a harvest adds about 16,000, and at the old cap the store could
+   * have taken three megabytes of the few a browser allows and crowded out the
+   * saved routes. */
+  MAX_TERRAIN_POINTS: 80000,
   TERRAIN_EVICT_FRACTION: 0.2,   // how much of a full store to drop to make room
+
+  /* Free global elevation tiles, no key, on AWS Open Data. Used to aim
+   * waypoints at real hills and to draw the hills layer. The distance and
+   * climb this app reports still come from OpenRouteService: these tiles are
+   * a blended global product whose peaks read low, and swapping the reported
+   * numbers onto them would change every figure without evidence it improved
+   * one. Zoom 12 is the finest that carries real detail; 13 and above return
+   * the same values upsampled. */
+  TERRAIN_TILE_URL: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+  TERRAIN_TILE_ZOOM: 12,
+  TERRAIN_TILE_MAX: 9,           // tiles one harvest may fetch
+  /* Tiles are read at a coarser spacing than the store's own grid. A waypoint
+   * is chosen from ground within a few hundred metres of an ideal point, so
+   * 100 m is ample for aiming, and sampling every 50 m instead would put four
+   * times as much in a store that has to share a browser's few megabytes with
+   * your saved routes. */
+  TERRAIN_TILE_SAMPLE_M: 100,
+  TERRAIN_TILE_ATTRIBUTION: 'Elevation: Terrarium tiles, AWS Open Data',
 };
 
 // Browser storage keys.

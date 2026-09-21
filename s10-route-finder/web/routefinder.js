@@ -1361,3 +1361,130 @@ export class RouteLibrary {
     }
   }
 }
+
+// --- elevation tiles -------------------------------------------------------
+/* Free global elevation, as PNG tiles where the colour of a pixel encodes the
+ * height of the ground under it. One tile is a few kilometres square and holds
+ * tens of thousands of samples, against the handful a single route donates, so
+ * the app can know the shape of an area before it has ever run there.
+ *
+ * These feed waypoint choice and the hills layer only. What the app reports as
+ * distance and climb still comes from the routing service. */
+
+export const TILE_SIZE = 256;
+
+export function lonToTileX(lon, z) { return ((lon + 180) / 360) * 2 ** z; }
+
+export function latToTileY(lat, z) {
+  const r = (lat * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z;
+}
+
+export function tileXToLon(x, z) { return (x / 2 ** z) * 360 - 180; }
+
+export function tileYToLat(y, z) {
+  const n = Math.PI - (2 * Math.PI * y) / 2 ** z;
+  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+/* The encoding these tiles use. Heights below zero are real: the dataset
+ * carries sea floor depth as well as land, so open water reads well below 0. */
+export function decodeTerrarium(r, g, b) { return r * 256 + g + b / 256 - 32768; }
+
+export function tilePixelMetres(lat, z) {
+  return (40075016.686 * Math.cos((lat * Math.PI) / 180)) / 2 ** z / TILE_SIZE;
+}
+
+export function tileUrl(template, z, x, y) {
+  return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+}
+
+/* Which tiles cover a circle, nearest the middle first, so that truncating the
+ * list to a limit keeps the ground closest to where you are. */
+export function tilesCovering(lat, lon, radiusM, z) {
+  const dLat = (radiusM / 111320) * 1.02;
+  const dLon = dLat / Math.max(0.05, Math.cos((lat * Math.PI) / 180));
+  const x0 = Math.floor(lonToTileX(lon - dLon, z));
+  const x1 = Math.floor(lonToTileX(lon + dLon, z));
+  const y0 = Math.floor(latToTileY(lat + dLat, z));
+  const y1 = Math.floor(latToTileY(lat - dLat, z));
+  const cx = lonToTileX(lon, z);
+  const cy = latToTileY(lat, z);
+  const out = [];
+  for (let x = x0; x <= x1; x += 1) {
+    for (let y = y0; y <= y1; y += 1) {
+      out.push({ x, y, z, d: Math.hypot(x + 0.5 - cx, y + 0.5 - cy) });
+    }
+  }
+  return out.sort((a, b) => a.d - b.d).map(({ x, y, z: tz }) => ({ x, y, z: tz }));
+}
+
+/* Reads a decoded tile onto the grid the terrain store already uses. Sampling
+ * every pixel would be wasted work and would fill the store from one area:
+ * the store rounds to its own grid anyway, so the stride matches it. */
+export function sampleTile({ x, y, z }, pixels, gridM) {
+  const { data, width = TILE_SIZE, height = TILE_SIZE } = pixels;
+  const channels = data.length >= width * height * 4 ? 4 : 3;
+  const north = tileYToLat(y, z);
+  const south = tileYToLat(y + 1, z);
+  const west = tileXToLon(x, z);
+  const east = tileXToLon(x + 1, z);
+  const midLat = (north + south) / 2;
+  const stride = Math.max(1, Math.round(gridM / tilePixelMetres(midLat, z)));
+
+  const out = [];
+  for (let py = 0; py < height; py += stride) {
+    const lat = north + ((south - north) * (py + 0.5)) / height;
+    for (let px = 0; px < width; px += stride) {
+      const i = (py * width + px) * channels;
+      const ele = decodeTerrarium(data[i], data[i + 1], data[i + 2]);
+      if (!Number.isFinite(ele) || ele < -500 || ele > 9000) continue;
+      const lon = west + ((east - west) * (px + 0.5)) / width;
+      out.push([lon, lat, ele]);
+    }
+  }
+  return out;
+}
+
+export class TerrainTiles {
+  constructor({
+    loadTile,
+    zoom = CONFIG.TERRAIN_TILE_ZOOM,
+    maxTiles = CONFIG.TERRAIN_TILE_MAX,
+    template = CONFIG.TERRAIN_TILE_URL,
+    sampleM = CONFIG.TERRAIN_TILE_SAMPLE_M,
+  } = {}) {
+    this.loadTile = loadTile;
+    this.zoom = zoom;
+    this.maxTiles = maxTiles;
+    this.template = template;
+    this.sampleM = sampleM;
+    this.seen = new Set();
+  }
+
+  key(t) { return `${t.z}/${t.x}/${t.y}`; }
+
+  /* Fills the store with the ground around a point. Returns what happened
+   * rather than throwing: elevation makes the search better, and a search
+   * without it has to still run. */
+  async harvest(store, lat, lon, radiusM) {
+    if (!this.loadTile) return { fetched: 0, added: 0, failed: 0, skipped: 0, truncated: false };
+    const wanted = tilesCovering(lat, lon, radiusM, this.zoom);
+    const truncated = wanted.length > this.maxTiles;
+    const take = wanted.slice(0, this.maxTiles);
+
+    let fetched = 0; let added = 0; let failed = 0; let skipped = 0;
+    for (const tile of take) {
+      const id = this.key(tile);
+      if (this.seen.has(id)) { skipped += 1; continue; }
+      try {
+        const pixels = await this.loadTile(tileUrl(this.template, tile.z, tile.x, tile.y), tile);
+        if (!pixels || !pixels.data) { failed += 1; continue; }
+        added += store.addCoords(sampleTile(tile, pixels, this.sampleM));
+        this.seen.add(id);
+        fetched += 1;
+      } catch { failed += 1; }
+    }
+    return { fetched, added, failed, skipped, truncated };
+  }
+}

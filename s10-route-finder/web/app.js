@@ -2,10 +2,11 @@
  * All search logic lives in routefinder.js; this file only presents it. */
 import { APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 import {
-  Candidate, OrsClient, RouteLibrary, TerrainStore, diagnose, estimateSeconds,
-  formatDuration, geocode, gradientAt, gradientBand, insertWaypoint, insertionIndex,
-  longestClimb, moveWaypoint, parsePace, profile, readDiagnosis, removeWaypoint,
-  reverseProfile, routeThrough, search, steepestWindow,
+  Candidate, OrsClient, RouteLibrary, TILE_SIZE, TerrainStore, TerrainTiles,
+  decodeTerrarium, diagnose, estimateSeconds, formatDuration, geocode, gradientAt,
+  gradientBand, insertWaypoint, insertionIndex, longestClimb, moveWaypoint, parsePace,
+  profile, readDiagnosis, removeWaypoint, reverseProfile, routeThrough, search,
+  steepestWindow, tileUrl,
 } from './routefinder.js';
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +69,8 @@ const plot = {
   ignoreClicksUntil: 0,
 };
 let library = null;
+let tiles = null;
+let hills = null;
 
 // --- boot ------------------------------------------------------------------
 /* Anything that throws lands on the page rather than only in a console nobody
@@ -501,6 +504,15 @@ async function runSearch() {
 
   const shape = $('shape').value;
   setBusy(true);
+
+  /* Learn the ground before choosing where to aim. Waypoints go out to roughly
+   * a quarter of the target distance, and each is chosen from terrain within a
+   * few hundred metres of its ideal point, so that is the area worth knowing.
+   * These tiles cost no routing requests and carry no key. */
+  showLoading('Reading the shape of the ground around your start\u2026');
+  const reach = distanceKm * 1000 * (CONFIG.LOOP_WAYPOINT_FACTOR + CONFIG.TERRAIN_SEARCH_RADIUS_FRACTION);
+  const ground = await harvestTerrain(start.lat, start.lon, Math.max(1500, reach));
+
   showLoading(`Generating and measuring candidate routes. Up to ${CONFIG.REQUEST_BUDGET} requests, `
     + 'spaced out to stay inside the free tier, so give it half a minute.');
 
@@ -518,7 +530,7 @@ async function runSearch() {
     clearMessages();
     handleResult(result, {
       distanceKm, ascentM: ascent.metres, climbLabel: ascent.label, shape,
-    }, client, stored);
+    }, client, stored, ground);
   } catch (err) {
     clearMessages();
     message('error', err.message || 'The search failed.');
@@ -527,9 +539,15 @@ async function runSearch() {
   }
 }
 
-function handleResult(result, target, client, stored) {
+function handleResult(result, target, client, stored, ground = null) {
   searchCount += 1;
   refreshTerrainCount();
+
+  if (ground && ground.failed && !ground.fetched && !ground.skipped) {
+    message('warn', 'The elevation tiles would not load, so this search aimed its '
+      + 'waypoints using only ground earlier routes had crossed. The climb figures '
+      + 'themselves are unaffected: those come from the routing service.');
+  }
 
   if (result.stoppedEarly) message('error', result.stoppedEarly);
 
@@ -984,34 +1002,155 @@ function refreshDetail() {
 }
 
 // --- terrain overlay -------------------------------------------------------
+function metresAcrossView() {
+  if (!map) return 4000;
+  const b = map.getBounds();
+  const ne = b.getNorthEast();
+  const sw = b.getSouthWest();
+  return Math.max(500, haversineMetres(sw.lat, sw.lng, ne.lat, ne.lng));
+}
+
+function haversineMetres(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const p = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * p) / 2) ** 2
+    + Math.cos(lat1 * p) * Math.cos(lat2 * p) * Math.sin(((lon2 - lon1) * p) / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/* Fetches the shape of the ground around a point into the terrain store, so a
+ * search can aim its waypoints at real hills the first time it runs somewhere
+ * rather than only at ground earlier routes happened to cross. Never throws:
+ * elevation makes a search better, and a search without it still has to run. */
+async function harvestTerrain(lat, lon, radiusM) {
+  if (!tiles) tiles = new TerrainTiles({ loadTile: loadTileImage });
+  try {
+    const result = await tiles.harvest(store, lat, lon, radiusM);
+    if (result.added) { store.save(); refreshTerrainCount(); }
+    return result;
+  } catch {
+    return { fetched: 0, added: 0, failed: 1, skipped: 0, truncated: false };
+  }
+}
+
 function refreshTerrainCount() {
   $('terrainCount').textContent = store.size
     ? `${store.size.toLocaleString('en-GB')} terrain points stored`
     : 'terrain store empty';
 }
 
-function toggleTerrain(on) {
-  if (!map) return;
-  if (terrainLayer) { map.removeLayer(terrainLayer); terrainLayer = null; }
-  if (!on) return;
-  const bounds = map.getBounds();
-  const points = store.points().filter((p) => bounds.contains([p[0], p[1]]));
-  const stride = Math.max(1, Math.ceil(points.length / 1500));
-  const lo = points.reduce((a, p) => Math.min(a, p[2]), Infinity);
-  const hi = points.reduce((a, p) => Math.max(a, p[2]), -Infinity);
-  terrainLayer = L.layerGroup();
-  for (let i = 0; i < points.length; i += stride) {
-    const [lat, lon, ele] = points[i];
-    const t = (ele - lo) / Math.max(1, hi - lo);
-    L.circleMarker([lat, lon], {
-      radius: 3, weight: 0, interactive: false,
-      fillColor: t > 0.66 ? '#8e2f24' : t > 0.33 ? '#e8a05a' : '#5598e7',
-      fillOpacity: 0.55,
-    }).addTo(terrainLayer);
-  }
-  terrainLayer.addTo(map);
-  if (!points.length) message('info', 'No terrain samples in view yet. They build up as you search.');
+/* Elevation as a picture of the ground. The scale is sequential, so it is one
+ * hue running light to dark: low ground pale, high ground deep. The previous
+ * version ran blue to orange to red, which is a diverging scheme doing a
+ * sequential job, and read as three categories of hill rather than a slope.
+ *
+ * Checked for what a sequential ramp is actually judged on, lightness falling
+ * monotonically: 0.931 down to 0.319 in OKLab, a span of 0.612. Blue is the
+ * documented default for sequential data and is wrong here for a reason the
+ * palette cannot know: on a map, blue is water. */
+const HILL_RAMP = ['#fbe3d4', '#f5c09f', '#ec9260', '#eb6834', '#c04a1d', '#8a3212', '#561f0a']
+  .map((h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]);
+
+function hillColour(t) {
+  const x = Math.max(0, Math.min(1, t)) * (HILL_RAMP.length - 1);
+  const i = Math.min(HILL_RAMP.length - 2, Math.floor(x));
+  const f = x - i;
+  const a = HILL_RAMP[i];
+  const b = HILL_RAMP[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
+
+/* Decodes one elevation tile into pixels a canvas can read. */
+function loadTileImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = TILE_SIZE;
+        canvas.height = TILE_SIZE;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, TILE_SIZE, TILE_SIZE);
+        resolve(ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE));
+      } catch (err) { reject(err); }
+    };
+    img.onerror = () => reject(new Error('elevation tile would not load'));
+    img.src = url;
+  });
+}
+
+/* The range the colours are spread over. A fixed range would make flat country
+ * one flat wash and hilly country clip, so it follows the ground in view. */
+function hillDomain() {
+  if (!map || !store.size) return null;
+  const b = map.getBounds();
+  let lo = Infinity;
+  let hi = -Infinity;
+  store.points().forEach((p) => {
+    if (!b.contains([p[0], p[1]])) return;
+    if (p[2] < lo) lo = p[2];
+    if (p[2] > hi) hi = p[2];
+  });
+  if (!Number.isFinite(lo) || hi - lo < 5) return null;
+  return { lo, hi };
+}
+
+function makeHillsLayer() {
+  const Hills = L.GridLayer.extend({
+    createTile(coords, done) {
+      const canvas = document.createElement('canvas');
+      canvas.width = TILE_SIZE;
+      canvas.height = TILE_SIZE;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const url = tileUrl(CONFIG.TERRAIN_TILE_URL, coords.z, coords.x, coords.y);
+      loadTileImage(url).then((pixels) => {
+        const { data } = pixels;
+        const domain = hills && hills.domain ? hills.domain : { lo: 0, hi: 500 };
+        const span = Math.max(1, domain.hi - domain.lo);
+        for (let i = 0; i < data.length; i += 4) {
+          const ele = decodeTerrarium(data[i], data[i + 1], data[i + 2]);
+          const [r, g, bl] = hillColour((ele - domain.lo) / span);
+          data[i] = r; data[i + 1] = g; data[i + 2] = bl; data[i + 3] = 150;
+        }
+        ctx.putImageData(pixels, 0, 0);
+        done(null, canvas);
+      }).catch((err) => done(err, canvas));
+      return canvas;
+    },
+  });
+  return new Hills({
+    maxNativeZoom: CONFIG.TERRAIN_TILE_ZOOM,   // above this the data is upsampled
+    minZoom: 9,
+    attribution: CONFIG.TERRAIN_TILE_ATTRIBUTION,
+    pane: 'tilePane',
+    zIndex: 250,
+  });
+}
+
+async function toggleTerrain(on) {
+  if (!map) return;
+  if (hills) { map.removeLayer(hills); hills = null; }
+  if (!on) return;
+
+  const centre = map.getCenter();
+  const radius = Math.max(1500, metresAcrossView() / 2);
+  const before = store.size;
+  const harvested = await harvestTerrain(centre.lat, centre.lng, radius);
+  if (harvested && harvested.failed && !harvested.fetched && store.size === before) {
+    message('warn', 'The elevation tiles would not load, so the hills cannot be drawn. '
+      + 'They come from a free service with no key, which is occasionally unavailable.');
+    $('terrainBtn').setAttribute('aria-pressed', 'false');
+    $('terrainBtn').textContent = 'Show hills';
+    return;
+  }
+
+  hills = makeHillsLayer();
+  hills.domain = hillDomain() || { lo: 0, hi: 400 };
+  hills.addTo(map);
+  refreshTerrainCount();
+}
+
 
 // --- geocoding -------------------------------------------------------------
 // --- plotting your own route ----------------------------------------------
@@ -1463,7 +1602,7 @@ function wireEvents() {
   $('terrainBtn').addEventListener('click', function terrain() {
     const on = this.getAttribute('aria-pressed') !== 'true';
     this.setAttribute('aria-pressed', String(on));
-    this.textContent = on ? 'Hide terrain samples' : 'Show terrain samples';
+    this.textContent = on ? 'Hide hills' : 'Show hills';
     toggleTerrain(on);
   });
 
