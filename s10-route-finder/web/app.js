@@ -2,8 +2,11 @@
  * All search logic lives in routefinder.js; this file only presents it. */
 import { APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 import {
-  OrsClient, TerrainStore, estimateSeconds, formatDuration, geocode, gradientAt,
-  gradientBand, longestClimb, parsePace, profile, reverseProfile, search, steepestWindow,
+  Candidate, OrsClient, RouteLibrary, TILE_SIZE, TerrainStore, TerrainTiles,
+  decodeTerrarium, diagnose, estimateSeconds, formatDuration, geocode, gradientAt,
+  gradientBand, insertWaypoint, insertionIndex, longestClimb, moveWaypoint, parsePace,
+  profile, readDiagnosis, removeWaypoint, reverseProfile, routeThrough, search,
+  steepestWindow, tileUrl,
 } from './routefinder.js';
 
 const $ = (id) => document.getElementById(id);
@@ -46,6 +49,37 @@ let activeProfile = [];      // the selected route, in the direction being shown
 
 const routeLayer = { lines: [], hits: [], arrows: null, cursor: null, turn: null };
 let terrainLayer = null;
+
+/* Routes you place yourself. Kept apart from the search results because the
+ * points you placed have to survive re-routing, which the drawn geometry does
+ * not: every edit throws the old line away and asks for a new one. */
+const plot = {
+  active: false,
+  waypoints: [],
+  route: null,
+  closeLoop: false,
+  markers: [],
+  line: null,
+  hit: null,
+  client: null,
+  busy: false,
+  history: [],
+  /* Leaflet can follow a drag with a click on the same marker. Without this the
+   * point you just dragged would delete itself. */
+  ignoreClicksUntil: 0,
+  /* Where the middle of the map was when this pan started, so a jitter can be
+   * told from a deliberate move. */
+  panFrom: null,
+  again: false,
+  /* Placing turned off, so the map can be looked around without leaving points
+   * behind. Remembered between visits: it is how someone likes to work, not a
+   * transient state. */
+  locked: false,
+};
+let rerouteTimer = null;
+let library = null;
+let tiles = null;
+let hills = null;
 
 // --- boot ------------------------------------------------------------------
 /* Anything that throws lands on the page rather than only in a console nobody
@@ -90,6 +124,7 @@ function installErrorReporter() {
 function boot() {
   installErrorReporter();
   store = new TerrainStore({ storage: safeStorage() });
+  library = new RouteLibrary({ storage: safeStorage() });
 
   // The controls are wired before the map, so a map failure cannot take the
   // whole interface down with it.
@@ -99,6 +134,7 @@ function boot() {
   wireEvents();
   updateSummary();
   refreshTerrainCount();
+  renderSaved();
 
   try {
     initMap();
@@ -176,7 +212,32 @@ function initMap() {
     const p = startMarker.getLatLng();
     setStart(p.lat, p.lng, 'Dropped pin');
   });
-  map.on('click', (e) => setStart(e.latlng.lat, e.latlng.lng, 'Map pin'));
+  map.on('click', (e) => {
+    if (plot.active) {
+      if (plot.locked || Date.now() < plot.ignoreClicksUntil) return;
+      addPlotPoint(e.latlng.lat, e.latlng.lng);
+      return;
+    }
+    setStart(e.latlng.lat, e.latlng.lng, 'Map pin');
+  });
+
+  /* Aim with the crosshair: drag the ground under it and let go. Only a real
+   * pan counts. A zoom is not a pan, and neither is a wobble on the way to a
+   * tap, and either dropping a point would cost a routing request to undo. */
+  map.on('dragstart', () => {
+    plot.panFrom = plot.active && !plot.locked ? map.getCenter() : null;
+  });
+  map.on('dragend', () => {
+    if (!plot.active || plot.locked || !plot.panFrom) return;
+    const from = plot.panFrom;
+    plot.panFrom = null;
+    const zoom = map.getZoom();
+    const moved = map.project(map.getCenter(), zoom).distanceTo(map.project(from, zoom));
+    if (moved < CONFIG.PLOT_PAN_THRESHOLD_PX) return;
+    const centre = map.getCenter();
+    plot.ignoreClicksUntil = Date.now() + 400;
+    addPlotPoint(centre.lat, centre.lng);
+  });
   map.on('zoomend', () => { if (activeProfile.length) drawArrows(); });
 }
 
@@ -193,6 +254,7 @@ function buildClimbPresets() {
 
 function loadSettings() {
   apiKey = read(STORAGE.key, '');
+  plot.locked = Boolean(read(STORAGE.plotLock, ''));
   renderKeyState();
   const pace = read(STORAGE.pace, '');
   $('pace').value = pace;
@@ -219,10 +281,79 @@ function message(kind, text) {
 }
 function clearMessages() { $('messages').textContent = ''; }
 
+// --- connection diagnosis --------------------------------------------------
+/* A fetch that fails tells the page nothing, and on a phone there is no Network
+ * tab to fall back on. This sends three requests that fail in different ways and
+ * reports which one broke, so the cause can be named instead of guessed at. */
+function renderDiagnosis(results, verdict) {
+  const box = $('diagnosis');
+  box.hidden = false;
+  box.textContent = '';
+
+  const summary = document.createElement('p');
+  summary.className = 'verdict';
+  summary.textContent = verdict.text;
+  box.appendChild(summary);
+
+  const list = document.createElement('ul');
+  results.forEach((r) => {
+    const li = document.createElement('li');
+    const answered = r.outcome === 'answered';
+    const good = answered && r.status < 400;
+
+    const mark = document.createElement('span');
+    mark.className = 'mark';
+    mark.textContent = good ? '\u2713' : (answered ? '\u2014' : '\u2717');
+    li.appendChild(mark);
+
+    const probe = document.createElement('span');
+    probe.className = 'probe';
+    probe.textContent = r.label;
+    const note = document.createElement('span');
+    note.className = 'note';
+    note.textContent = r.note;
+    probe.appendChild(note);
+    li.appendChild(probe);
+
+    const result = document.createElement('span');
+    result.className = 'result';
+    result.textContent = answered ? `HTTP ${r.status}` : 'no answer';
+    li.appendChild(result);
+
+    list.appendChild(li);
+  });
+  box.appendChild(list);
+}
+
+async function runDiagnosis() {
+  const button = $('diagnose');
+  clearMessages();
+  if (!apiKey) {
+    message('error', 'Add your key first, then test the connection.');
+    return;
+  }
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = 'Testing\u2026';
+  $('diagnosis').hidden = true;
+  try {
+    const results = await diagnose(apiKey);
+    renderDiagnosis(results, readDiagnosis(results));
+  } catch (err) {
+    message('error', `The test itself failed: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
 // --- start point -----------------------------------------------------------
-function insideBbox(lat, lon) {
-  const b = CONFIG.BBOX;
-  return lat >= b.minLat && lat <= b.maxLat && lon >= b.minLon && lon <= b.maxLon;
+/* The app used to refuse any start outside a Sheffield bounding box. Routes can
+ * now be plotted anywhere routing data exists, so the only thing worth checking
+ * is that the numbers are numbers. */
+function usableStart(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon)
+    && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 }
 
 function setStart(lat, lon, name, { silent = false } = {}) {
@@ -230,11 +361,11 @@ function setStart(lat, lon, name, { silent = false } = {}) {
   if (startMarker) startMarker.setLatLng([lat, lon]);
   $('startPill').textContent = `Start: ${start.name}`;
   $('sumStart').textContent = start.name;
-  const ok = insideBbox(lat, lon);
+  const ok = usableStart(lat, lon);
   $('searchBtn').disabled = !ok || busy;
   if (!ok && !silent) {
     clearMessages();
-    message('error', 'That start is outside the Sheffield area this app covers. Pick somewhere closer to S10.');
+    message('error', 'That start point is not a real position.');
   }
   write(STORAGE.startName, start.name);
 }
@@ -385,7 +516,7 @@ function showLoading(text) {
 // --- search ----------------------------------------------------------------
 function setBusy(state) {
   busy = state;
-  $('searchBtn').disabled = state || !insideBbox(start.lat, start.lon);
+  $('searchBtn').disabled = state || !usableStart(start.lat, start.lon);
   $('searchBtn').textContent = state ? 'Searching…' : 'Search';
 }
 
@@ -405,6 +536,15 @@ async function runSearch() {
 
   const shape = $('shape').value;
   setBusy(true);
+
+  /* Learn the ground before choosing where to aim. Waypoints go out to roughly
+   * a quarter of the target distance, and each is chosen from terrain within a
+   * few hundred metres of its ideal point, so that is the area worth knowing.
+   * These tiles cost no routing requests and carry no key. */
+  showLoading('Reading the shape of the ground around your start\u2026');
+  const reach = distanceKm * 1000 * (CONFIG.LOOP_WAYPOINT_FACTOR + CONFIG.TERRAIN_SEARCH_RADIUS_FRACTION);
+  const ground = await harvestTerrain(start.lat, start.lon, Math.max(1500, reach));
+
   showLoading(`Generating and measuring candidate routes. Up to ${CONFIG.REQUEST_BUDGET} requests, `
     + 'spaced out to stay inside the free tier, so give it half a minute.');
 
@@ -422,7 +562,7 @@ async function runSearch() {
     clearMessages();
     handleResult(result, {
       distanceKm, ascentM: ascent.metres, climbLabel: ascent.label, shape,
-    }, client, stored);
+    }, client, stored, ground);
   } catch (err) {
     clearMessages();
     message('error', err.message || 'The search failed.');
@@ -431,9 +571,15 @@ async function runSearch() {
   }
 }
 
-function handleResult(result, target, client, stored) {
+function handleResult(result, target, client, stored, ground = null) {
   searchCount += 1;
   refreshTerrainCount();
+
+  if (ground && ground.failed && !ground.fetched && !ground.skipped) {
+    message('warn', 'The elevation tiles would not load, so this search aimed its '
+      + 'waypoints using only ground earlier routes had crossed. The climb figures '
+      + 'themselves are unaffected: those come from the routing service.');
+  }
 
   if (result.stoppedEarly) message('error', result.stoppedEarly);
 
@@ -459,8 +605,8 @@ function handleResult(result, target, client, stored) {
       && result.warnings.every((w) => w.startsWith('Could not reach OpenRouteService'));
     message('warn', allUnreachable
       ? 'Every request failed before it reached OpenRouteService, so this is not about '
-        + 'your start point or distance. Check the reason above, wait a minute if you have '
-        + 'been searching repeatedly, then try again.'
+        + 'your start point or distance. Open Settings and press "Test the connection": '
+        + 'it sends three requests designed to fail in different ways and names the cause.'
       : 'No routes came back. Try a different start point or distance.');
     return;
   }
@@ -888,36 +1034,560 @@ function refreshDetail() {
 }
 
 // --- terrain overlay -------------------------------------------------------
+function metresAcrossView() {
+  if (!map) return 4000;
+  const b = map.getBounds();
+  const ne = b.getNorthEast();
+  const sw = b.getSouthWest();
+  return Math.max(500, haversineMetres(sw.lat, sw.lng, ne.lat, ne.lng));
+}
+
+function haversineMetres(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const p = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * p) / 2) ** 2
+    + Math.cos(lat1 * p) * Math.cos(lat2 * p) * Math.sin(((lon2 - lon1) * p) / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/* Fetches the shape of the ground around a point into the terrain store, so a
+ * search can aim its waypoints at real hills the first time it runs somewhere
+ * rather than only at ground earlier routes happened to cross. Never throws:
+ * elevation makes a search better, and a search without it still has to run. */
+async function harvestTerrain(lat, lon, radiusM) {
+  if (!tiles) tiles = new TerrainTiles({ loadTile: loadTileImage });
+  try {
+    const result = await tiles.harvest(store, lat, lon, radiusM);
+    if (result.added) { store.save(); refreshTerrainCount(); }
+    return result;
+  } catch {
+    return { fetched: 0, added: 0, failed: 1, skipped: 0, truncated: false };
+  }
+}
+
 function refreshTerrainCount() {
   $('terrainCount').textContent = store.size
     ? `${store.size.toLocaleString('en-GB')} terrain points stored`
     : 'terrain store empty';
 }
 
-function toggleTerrain(on) {
-  if (!map) return;
-  if (terrainLayer) { map.removeLayer(terrainLayer); terrainLayer = null; }
-  if (!on) return;
-  const bounds = map.getBounds();
-  const points = store.points().filter((p) => bounds.contains([p[0], p[1]]));
-  const stride = Math.max(1, Math.ceil(points.length / 1500));
-  const lo = points.reduce((a, p) => Math.min(a, p[2]), Infinity);
-  const hi = points.reduce((a, p) => Math.max(a, p[2]), -Infinity);
-  terrainLayer = L.layerGroup();
-  for (let i = 0; i < points.length; i += stride) {
-    const [lat, lon, ele] = points[i];
-    const t = (ele - lo) / Math.max(1, hi - lo);
-    L.circleMarker([lat, lon], {
-      radius: 3, weight: 0, interactive: false,
-      fillColor: t > 0.66 ? '#8e2f24' : t > 0.33 ? '#e8a05a' : '#5598e7',
-      fillOpacity: 0.55,
-    }).addTo(terrainLayer);
-  }
-  terrainLayer.addTo(map);
-  if (!points.length) message('info', 'No terrain samples in view yet. They build up as you search.');
+/* Elevation as a picture of the ground. The scale is sequential, so it is one
+ * hue running light to dark: low ground pale, high ground deep. The previous
+ * version ran blue to orange to red, which is a diverging scheme doing a
+ * sequential job, and read as three categories of hill rather than a slope.
+ *
+ * Checked for what a sequential ramp is actually judged on, lightness falling
+ * monotonically: 0.931 down to 0.319 in OKLab, a span of 0.612. Blue is the
+ * documented default for sequential data and is wrong here for a reason the
+ * palette cannot know: on a map, blue is water. */
+const HILL_RAMP = ['#fbe3d4', '#f5c09f', '#ec9260', '#eb6834', '#c04a1d', '#8a3212', '#561f0a']
+  .map((h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]);
+
+function hillColour(t) {
+  const x = Math.max(0, Math.min(1, t)) * (HILL_RAMP.length - 1);
+  const i = Math.min(HILL_RAMP.length - 2, Math.floor(x));
+  const f = x - i;
+  const a = HILL_RAMP[i];
+  const b = HILL_RAMP[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
+/* Decodes one elevation tile into pixels a canvas can read. */
+function loadTileImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = TILE_SIZE;
+        canvas.height = TILE_SIZE;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, TILE_SIZE, TILE_SIZE);
+        resolve(ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE));
+      } catch (err) { reject(err); }
+    };
+    img.onerror = () => reject(new Error('elevation tile would not load'));
+    img.src = url;
+  });
+}
+
+/* The range the colours are spread over. A fixed range would make flat country
+ * one flat wash and hilly country clip, so it follows the ground in view. */
+function hillDomain() {
+  if (!map || !store.size) return null;
+  const b = map.getBounds();
+  let lo = Infinity;
+  let hi = -Infinity;
+  store.points().forEach((p) => {
+    if (!b.contains([p[0], p[1]])) return;
+    if (p[2] < lo) lo = p[2];
+    if (p[2] > hi) hi = p[2];
+  });
+  if (!Number.isFinite(lo) || hi - lo < 5) return null;
+  return { lo, hi };
+}
+
+function makeHillsLayer() {
+  const Hills = L.GridLayer.extend({
+    createTile(coords, done) {
+      const canvas = document.createElement('canvas');
+      canvas.width = TILE_SIZE;
+      canvas.height = TILE_SIZE;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const url = tileUrl(CONFIG.TERRAIN_TILE_URL, coords.z, coords.x, coords.y);
+      loadTileImage(url).then((pixels) => {
+        const { data } = pixels;
+        const domain = hills && hills.domain ? hills.domain : { lo: 0, hi: 500 };
+        const span = Math.max(1, domain.hi - domain.lo);
+        for (let i = 0; i < data.length; i += 4) {
+          const ele = decodeTerrarium(data[i], data[i + 1], data[i + 2]);
+          const [r, g, bl] = hillColour((ele - domain.lo) / span);
+          data[i] = r; data[i + 1] = g; data[i + 2] = bl; data[i + 3] = 150;
+        }
+        ctx.putImageData(pixels, 0, 0);
+        done(null, canvas);
+      }).catch((err) => done(err, canvas));
+      return canvas;
+    },
+  });
+  return new Hills({
+    maxNativeZoom: CONFIG.TERRAIN_TILE_ZOOM,   // above this the data is upsampled
+    minZoom: 9,
+    attribution: CONFIG.TERRAIN_TILE_ATTRIBUTION,
+    pane: 'tilePane',
+    zIndex: 250,
+  });
+}
+
+async function toggleTerrain(on) {
+  if (!map) return;
+  if (hills) { map.removeLayer(hills); hills = null; }
+  if (!on) return;
+
+  const centre = map.getCenter();
+  const radius = Math.max(1500, metresAcrossView() / 2);
+  const before = store.size;
+  const harvested = await harvestTerrain(centre.lat, centre.lng, radius);
+  if (harvested && harvested.failed && !harvested.fetched && store.size === before) {
+    message('warn', 'The elevation tiles would not load, so the hills cannot be drawn. '
+      + 'They come from a free service with no key, which is occasionally unavailable.');
+    $('terrainBtn').setAttribute('aria-pressed', 'false');
+    $('terrainBtn').textContent = 'Show hills';
+    return;
+  }
+
+  hills = makeHillsLayer();
+  hills.domain = hillDomain() || { lo: 0, hi: 400 };
+  hills.addTo(map);
+  refreshTerrainCount();
+}
+
+
 // --- geocoding -------------------------------------------------------------
+// --- plotting your own route ----------------------------------------------
+function plotIcon(index, total) {
+  const first = index === 0;
+  const last = index === total - 1 && total > 1;
+  const fill = first ? MAP_INK : (last ? '#8e2f24' : '#FFFFFF');
+  const ink = first || last ? '#FFFFFF' : MAP_INK;
+  const label = first ? 'S' : (last && !plot.closeLoop ? 'F' : String(index + 1));
+  return L.divIcon({
+    className: '',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    html: `<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">`
+      + `<circle cx="11" cy="11" r="9" fill="${fill}" stroke="${MAP_INK}" stroke-width="2"/>`
+      + `<text x="11" y="15" text-anchor="middle" font-size="10" font-weight="700"`
+      + ` font-family="system-ui,sans-serif" fill="${ink}">${label}</text></svg>`,
+  });
+}
+
+function clearPlotLayers() {
+  if (!map) return;
+  plot.markers.forEach((m) => map.removeLayer(m));
+  plot.markers = [];
+  if (plot.line) { map.removeLayer(plot.line); plot.line = null; }
+  if (plot.hit) { map.removeLayer(plot.hit); plot.hit = null; }
+}
+
+function drawPlot() {
+  if (!map) return;
+  clearPlotLayers();
+  if (!plot.active && !plot.waypoints.length) return;
+
+  if (plot.route && plot.route.coords.length) {
+    const latLngs = plot.route.coords.map((c) => [c[1], c[0]]);
+    plot.line = L.polyline(latLngs, { color: MAP_INK, weight: 5, opacity: 0.95 }).addTo(map);
+    if (plot.active) {
+      plot.hit = L.polyline(latLngs, {
+        color: '#000', opacity: 0, weight: 24, className: 'route-hit',
+      }).addTo(map);
+      plot.hit.on('click', (e) => {
+        L.DomEvent.stop(e);
+        if (Date.now() < plot.ignoreClicksUntil) return;
+        const at = insertionIndex(plot.route, e.latlng.lat, e.latlng.lng);
+        pushHistory();
+        plot.waypoints = insertWaypoint(plot.waypoints, at, {
+          lat: e.latlng.lat, lon: e.latlng.lng,
+        });
+        scheduleReroute();
+      });
+    }
+  }
+
+  if (!plot.active) return;
+  plot.waypoints.forEach((w, i) => {
+    const marker = L.marker([w.lat, w.lon], {
+      draggable: true, icon: plotIcon(i, plot.waypoints.length), zIndexOffset: 1100,
+    }).addTo(map);
+    marker.bindTooltip(i === 0 ? 'Your first point. Drag to move, tap to remove.'
+      : 'Drag to move, tap to remove.', { direction: 'top', offset: [0, -14] });
+    marker.on('dragend', () => {
+      const p = marker.getLatLng();
+      plot.ignoreClicksUntil = Date.now() + 400;
+      pushHistory();
+      plot.waypoints = moveWaypoint(plot.waypoints, i, { lat: p.lat, lon: p.lng });
+      scheduleReroute();
+    });
+    marker.on('click', (e) => {
+      L.DomEvent.stop(e);
+      if (Date.now() < plot.ignoreClicksUntil) return;
+      pushHistory();
+      plot.waypoints = removeWaypoint(plot.waypoints, i);
+      scheduleReroute();
+    });
+    plot.markers.push(marker);
+  });
+}
+
+function pushHistory() {
+  plot.history.push({
+    waypoints: plot.waypoints.map((w) => ({ ...w })),
+    closeLoop: plot.closeLoop,
+  });
+  if (plot.history.length > 30) plot.history.shift();
+}
+
+/* Shown three ways, because a mode inside a mode is the easiest thing in an
+ * interface to lose track of: the button says which state it is in, the
+ * crosshair fades, and a padlock appears inside it. */
+function renderPlotLock() {
+  const off = plot.locked;
+  $('plotLock').setAttribute('aria-pressed', String(off));
+  $('plotLockText').textContent = off ? 'Placing off' : 'Placing on';
+  $('plotLock').title = off
+    ? 'Panning will not place points. Tap to start placing again.'
+    : 'Letting go of a pan places a point. Tap to stop that.';
+  $('crosshair').classList.toggle('locked', off);
+}
+
+function setPlotLock(off) {
+  plot.locked = off;
+  write(STORAGE.plotLock, off ? '1' : '');
+  renderPlotLock();
+  renderPlotStats();
+}
+
+function plotStatus(text) { $('plotStats').textContent = text; }
+
+function renderPlotStats() {
+  const n = plot.waypoints.length;
+  if (plot.locked && !plot.busy && !rerouteTimer) {
+    const so_far = n >= 2 && plot.route
+      ? `${(plot.route.distanceM / 1000).toFixed(2)} km so far. `
+      : '';
+    plotStatus(`${so_far}Placing is off, so pan and zoom freely. `
+      + 'The padlock turns it back on.');
+    return;
+  }
+  if (!n) { plotStatus('Drag the map so the crosshair is where you want to start, then let go.'); return; }
+  if (n < 2) { plotStatus('One point placed. Tap again to make a route.'); return; }
+  if (plot.busy) { plotStatus(`Working out the route through ${n} points\u2026`); return; }
+  if (rerouteTimer) { plotStatus(`${n} points placed\u2026`); return; }
+  if (!plot.route) { plotStatus(`${n} points placed.`); return; }
+  const km = (plot.route.distanceM / 1000).toFixed(2);
+  const up = Math.round(plot.route.ascentM);
+  const seconds = estimateSeconds(plot.route.distanceM, plot.route.ascentM, paceSeconds);
+  const time = seconds ? `, about ${formatDuration(seconds)}` : '';
+  plotStatus(`${km} km, ${up} m of climb${time}`);
+  $('plotUndo').disabled = plot.history.length === 0;
+}
+
+function plotBudgetText() {
+  if (!plot.client) return;
+  const spent = plot.client.requestsUsed;
+  $('budgetText').textContent = `Plotting: spent ${spent} of ${CONFIG.PLOT_BUDGET} requests`;
+  $('quotaFill').style.width = `${Math.round((spent / CONFIG.PLOT_BUDGET) * 100)}%`;
+}
+
+/* Points land the instant you release. The request that turns them into a route
+ * waits a moment, so three points panned out in quick succession cost one
+ * request instead of three. */
+function scheduleReroute(delay = CONFIG.PLOT_ROUTE_DEBOUNCE_MS) {
+  drawPlot();
+  renderPlotStats();
+  if (rerouteTimer) clearTimeout(rerouteTimer);
+  rerouteTimer = setTimeout(() => { rerouteTimer = null; reroute(); }, delay);
+}
+
+async function reroute() {
+  drawPlot();
+  renderPlotStats();
+  if (plot.waypoints.length < 2) {
+    plot.route = null;
+    drawPlot();
+    showPlotAsResult();
+    return;
+  }
+  // A request already out: remember to go round again rather than drop the edit.
+  if (plot.busy) { plot.again = true; return; }
+  plot.busy = true;
+  renderPlotStats();
+  try {
+    plot.route = await routeThrough(plot.client, plot.waypoints, { closeLoop: plot.closeLoop });
+    clearMessages();
+  } catch (err) {
+    message('error', err.message);
+  } finally {
+    plot.busy = false;
+    plotBudgetText();
+    drawPlot();
+    renderPlotStats();
+    showPlotAsResult();
+    if (plot.again) { plot.again = false; reroute(); }
+  }
+}
+
+/* A plotted route is shown through the same machinery as a searched one, so the
+ * elevation profile, the gradient colouring and the climb statistics all work
+ * without a second implementation. */
+function showPlotAsResult() {
+  if (!plot.route) return;
+  const targetDistanceM = Number($('distance').value) * 1000;
+  const target = {
+    distanceKm: Number($('distance').value),
+    ascentM: targetAscentM(Number($('distance').value)),
+  };
+  const candidate = new Candidate({
+    coords: plot.route.coords,
+    distanceM: plot.route.distanceM,
+    targetDistanceM,
+    targetAscentM: target.ascentM,
+    strategy: 'plotted by hand',
+    shape: 'plotted',
+  });
+  groups.unshift({
+    number: 0,
+    target,
+    plotted: true,
+    candidates: [candidate],
+    profiles: [profile(candidate.coords, candidate.distanceM)],
+  });
+  if (groups.length > 8) groups.pop();
+  selected = { group: 0, route: 0 };
+  selectRoute(0, 0, { fit: false });
+}
+
+function addPlotPoint(lat, lon) {
+  pushHistory();
+  plot.waypoints = insertWaypoint(plot.waypoints, plot.waypoints.length, { lat, lon });
+  scheduleReroute();
+}
+
+function setPlotMode(on) {
+  plot.active = on;
+  $('modeFind').setAttribute('aria-pressed', String(!on));
+  $('modePlot').setAttribute('aria-pressed', String(on));
+  $('modeFind').classList.toggle('on', !on);
+  $('modePlot').classList.toggle('on', on);
+  // The targets only govern a search, so they go away when nothing is searching.
+  $('findQuery').hidden = on;
+  if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
+  $('plotBar').hidden = !on;
+  $('crosshair').hidden = !on;
+  $('plotLock').hidden = !on;
+  renderPlotLock();
+  if (startMarker) {
+    if (on) map.removeLayer(startMarker);
+    else startMarker.addTo(map);
+  }
+  if (on) {
+    if (!plot.client) plot.client = new OrsClient({ apiKey, budget: CONFIG.PLOT_BUDGET });
+    if (!apiKey) message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
+    plotBudgetText();
+  } else {
+    $('budgetText').textContent = 'Tap the map to set your start';
+    $('quotaFill').style.width = '0';
+  }
+  drawPlot();
+  renderPlotStats();
+}
+
+function clearPlot() {
+  pushHistory();
+  plot.waypoints = [];
+  plot.route = null;
+  drawPlot();
+  renderPlotStats();
+}
+
+function undoPlot() {
+  const last = plot.history.pop();
+  if (!last) return;
+  plot.waypoints = last.waypoints;
+  plot.closeLoop = last.closeLoop;
+  $('plotLoop').setAttribute('aria-pressed', String(plot.closeLoop));
+  scheduleReroute();
+}
+
+// --- saved routes ----------------------------------------------------------
+function currentRouteForSaving() {
+  if (plot.active && plot.route) {
+    return {
+      coords: plot.route.coords,
+      distanceM: plot.route.distanceM,
+      ascentM: plot.route.ascentM,
+      descentM: plot.route.descentM,
+      closeLoop: plot.closeLoop,
+      waypoints: plot.waypoints,
+    };
+  }
+  const group = groups[selected.group];
+  if (!group) return null;
+  const candidate = group.candidates[selected.route];
+  if (!candidate) return null;
+  return {
+    coords: candidate.coords,
+    distanceM: candidate.distanceM,
+    ascentM: candidate.ascentM,
+    descentM: candidate.descentM,
+    closeLoop: candidate.shape === SHAPE_LOOP,
+    waypoints: [],
+  };
+}
+
+function renderSaved() {
+  const host = $('savedList');
+  const rows = library ? library.list() : [];
+  host.textContent = '';
+  $('savedEmpty').hidden = rows.length > 0;
+  $('savedCount').textContent = rows.length
+    ? `${rows.length} of ${CONFIG.SAVED_ROUTES_LIMIT}` : '';
+
+  rows.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'saved-row';
+
+    const what = document.createElement('span');
+    what.className = 'what';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = r.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const when = new Date(r.savedAt);
+    const km = (r.distanceM / 1000).toFixed(2);
+    meta.textContent = `${km} km, ${r.ascentM} m climb`
+      + `${r.plotted ? ', plotted by hand' : ''}`
+      + ` \u00b7 ${Number.isNaN(when.getTime()) ? '' : when.toLocaleDateString()}`;
+    what.appendChild(name);
+    what.appendChild(meta);
+    row.appendChild(what);
+
+    const acts = document.createElement('span');
+    acts.className = 'acts';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'small';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openSaved(r.id));
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'small';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => deleteSaved(r.id, r.name));
+    acts.appendChild(open);
+    acts.appendChild(del);
+    row.appendChild(acts);
+
+    host.appendChild(row);
+  });
+}
+
+function saveCurrentRoute() {
+  clearMessages();
+  const route = currentRouteForSaving();
+  if (!route) {
+    message('error', 'There is no route on screen to save yet.');
+    return;
+  }
+  const typed = $('routeName').value.trim();
+  const name = typed || `${(route.distanceM / 1000).toFixed(1)} km, ${Math.round(route.ascentM)} m`;
+  const result = library.save(route, name);
+  if (!result.ok) { message('error', result.reason); return; }
+  $('routeName').value = '';
+  renderSaved();
+  message('info', result.replaced ? `Replaced "${name}".` : `Saved as "${name}".`);
+}
+
+function openSaved(id) {
+  const saved = library.get(id);
+  if (!saved) { message('error', 'That route could not be read back.'); return; }
+  clearMessages();
+
+  if (saved.waypoints.length) {
+    // It was plotted, so it can go back to being editable.
+    if (!plot.active) setPlotMode(true);
+    plot.waypoints = saved.waypoints;
+    plot.closeLoop = saved.closeLoop;
+    $('plotLoop').setAttribute('aria-pressed', String(plot.closeLoop));
+    plot.route = {
+      coords: saved.coords,
+      distanceM: saved.distanceM,
+      ascentM: saved.ascentM,
+      descentM: saved.descentM,
+      wayPoints: [],
+      waypoints: saved.waypoints,
+      closeLoop: saved.closeLoop,
+    };
+    plot.history = [];
+    drawPlot();
+    renderPlotStats();
+    showPlotAsResult();
+    message('info', `"${saved.name}" opened for editing. Drag its points to change it.`);
+  } else {
+    if (plot.active) setPlotMode(false);
+    const candidate = new Candidate({
+      coords: saved.coords,
+      distanceM: saved.distanceM,
+      targetDistanceM: saved.distanceM,
+      targetAscentM: saved.ascentM || 1,
+      strategy: `saved as "${saved.name}"`,
+      shape: saved.closeLoop ? SHAPE_LOOP : 'saved',
+    });
+    groups.unshift({
+      number: 0,
+      target: { distanceKm: saved.distanceM / 1000, ascentM: saved.ascentM },
+      candidates: [candidate],
+      profiles: [profile(candidate.coords, candidate.distanceM)],
+    });
+    if (groups.length > 8) groups.pop();
+    selectRoute(0, 0, { fit: true });
+    message('info', `"${saved.name}" opened.`);
+  }
+
+  if (map && plot.line) map.fitBounds(plot.line.getBounds(), { padding: [28, 28] });
+}
+
+function deleteSaved(id, name) {
+  const result = library.remove(id);
+  clearMessages();
+  if (!result.ok) { message('error', result.reason); return; }
+  renderSaved();
+  message('info', `Deleted "${name}".`);
+}
+
 let geocodeTimer = null;
 function onPlaceInput(value) {
   clearTimeout(geocodeTimer);
@@ -925,7 +1595,10 @@ function onPlaceInput(value) {
   if (value.trim().length < 2) { results.hidden = true; results.textContent = ''; return; }
   geocodeTimer = setTimeout(async () => {
     try {
-      const hits = await geocode(value, apiKey);
+      const centre = map ? map.getCenter() : null;
+      const hits = await geocode(value, apiKey, {
+        focus: centre ? { lat: centre.lat, lon: centre.lng } : start,
+      });
       results.textContent = '';
       results.hidden = hits.length === 0;
       hits.forEach((hit) => {
@@ -934,10 +1607,6 @@ function onPlaceInput(value) {
         row.type = 'button';
         row.innerHTML = `<span class="what">${hit.label}</span><span class="where">${hit.locality}</span>`;
         row.addEventListener('click', () => {
-          if (!insideBbox(hit.lat, hit.lon)) {
-            message('error', `${hit.label} is outside the Sheffield area this app covers.`);
-            return;
-          }
           setStart(hit.lat, hit.lon, hit.label.split(',')[0]);
           if (map) map.setView([hit.lat, hit.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
           results.hidden = true;
@@ -963,10 +1632,6 @@ function locateMe() {
     (pos) => {
       $('locateBtn').disabled = false;
       const { latitude, longitude } = pos.coords;
-      if (!insideBbox(latitude, longitude)) {
-        message('error', 'You are outside the Sheffield area this app covers.');
-        return;
-      }
       setStart(latitude, longitude, 'My location');
       if (map) map.setView([latitude, longitude], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
       updateSummary();
@@ -1013,7 +1678,7 @@ function wireEvents() {
   $('terrainBtn').addEventListener('click', function terrain() {
     const on = this.getAttribute('aria-pressed') !== 'true';
     this.setAttribute('aria-pressed', String(on));
-    this.textContent = on ? 'Hide terrain samples' : 'Show terrain samples';
+    this.textContent = on ? 'Hide hills' : 'Show hills';
     toggleTerrain(on);
   });
 
@@ -1029,6 +1694,34 @@ function wireEvents() {
       return;
     }
     message('info', 'Key saved in this browser.');
+  });
+
+  $('diagnose').addEventListener('click', runDiagnosis);
+
+  $('modeFind').addEventListener('click', () => setPlotMode(false));
+  $('modePlot').addEventListener('click', () => setPlotMode(true));
+  $('plotDone').addEventListener('click', () => setPlotMode(false));
+  $('plotClear').addEventListener('click', clearPlot);
+  $('plotUndo').addEventListener('click', undoPlot);
+  $('plotLoop').addEventListener('click', function toggleLoop() {
+    pushHistory();
+    plot.closeLoop = !plot.closeLoop;
+    this.setAttribute('aria-pressed', String(plot.closeLoop));
+    scheduleReroute();
+  });
+  $('plotLock').addEventListener('click', () => setPlotLock(!plot.locked));
+  $('saveRouteBtn').addEventListener('click', saveCurrentRoute);
+  $('routeName').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveCurrentRoute();
+  });
+  $('mapSizeBtn').addEventListener('click', function toggleMapSize() {
+    const panel = document.querySelector('.map-panel');
+    const compact = !panel.classList.contains('compact');
+    panel.classList.toggle('compact', compact);
+    this.setAttribute('aria-pressed', String(compact));
+    this.textContent = compact ? 'Grow map' : 'Shrink map';
+    // Leaflet caches the size of its box, so it has to be told it changed.
+    if (map) setTimeout(() => map.invalidateSize(), 200);
   });
 
   $('changeKey').addEventListener('click', () => {

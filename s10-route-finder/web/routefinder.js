@@ -7,11 +7,18 @@
  *
  * Kept free of DOM and browser globals so it can be unit tested under node.
  */
-import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK } from './config.js';
+import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 111320;
-const M_PER_DEG_LON = 111320 * Math.cos((CONFIG.DEFAULT_START.lat * Math.PI) / 180);
+/* A degree of longitude shrinks towards the poles: 111 km at the equator, 66 km
+ * at Sheffield, 61 km in the far north of Scotland. This used to be a constant
+ * fixed at Sheffield's latitude, which was fine while the app covered one city
+ * and quietly wrong everywhere else. Each grid row knows its own latitude
+ * instead, so cells stay roughly square wherever a route is plotted. */
+function mPerDegLon(lat) {
+  return Math.max(1, M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180));
+}
 
 // --- geometry --------------------------------------------------------------
 export function haversineM(lat1, lon1, lat2, lon2) {
@@ -96,6 +103,7 @@ export function ascentDescentFromCoords(coords) {
  * Only the elevation is stored: the grid cell key encodes the position, which
  * keeps the whole store small enough for a phone's local storage. */
 const TERRAIN_KEY = 's10.terrain.v1';
+const TERRAIN_VERSION = 2;
 
 export class TerrainStore {
   constructor({ storage = null, gridM = CONFIG.TERRAIN_GRID_M } = {}) {
@@ -115,7 +123,9 @@ export class TerrainStore {
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw);
-      if (parsed.gridM !== this.gridM) return;   // old keys mean something else
+      // Old keys mean something else: the grid changed, or the keys predate the
+      // latitude-aware columns and would decode to the wrong place.
+      if (parsed.gridM !== this.gridM || parsed.version !== TERRAIN_VERSION) return;
       this.cells = new Map(Object.entries(parsed.cells || {}));
       this.decoded = [];
     } catch { /* a corrupt store is simply an empty one */ }
@@ -123,7 +133,9 @@ export class TerrainStore {
 
   save() {
     if (!this.storage || !this.dirty) return true;
-    const payload = JSON.stringify({ gridM: this.gridM, cells: Object.fromEntries(this.cells) });
+    const payload = JSON.stringify({
+      version: TERRAIN_VERSION, gridM: this.gridM, cells: Object.fromEntries(this.cells),
+    });
     try {
       this.storage.setItem(TERRAIN_KEY, payload);
       this.dirty = false;
@@ -142,18 +154,21 @@ export class TerrainStore {
 
   get size() { return this.cells.size; }
 
+  rowOf(lat) { return Math.round((lat * M_PER_DEG_LAT) / this.gridM); }
+
+  latOfRow(row) { return (row * this.gridM) / M_PER_DEG_LAT; }
+
+  colOf(lon, rowLat) { return Math.round((lon * mPerDegLon(rowLat)) / this.gridM); }
+
   key(lat, lon) {
-    const row = Math.round((lat * M_PER_DEG_LAT) / this.gridM);
-    const col = Math.round((lon * M_PER_DEG_LON) / this.gridM);
-    return `${row},${col}`;
+    const row = this.rowOf(lat);
+    return `${row},${this.colOf(lon, this.latOfRow(row))}`;
   }
 
-  static decodeKey(key, gridM) {
+  decodeKey(key) {
     const [row, col] = key.split(',').map(Number);
-    return {
-      lat: (row * gridM) / M_PER_DEG_LAT,
-      lon: (col * gridM) / M_PER_DEG_LON,
-    };
+    const lat = this.latOfRow(row);
+    return { lat, lon: (col * this.gridM) / mPerDegLon(lat) };
   }
 
   /* coords are ORS [lon, lat, elevation] triples. Returns cells added. */
@@ -161,32 +176,61 @@ export class TerrainStore {
     let added = 0;
     for (const c of coords) {
       if (c.length < 3 || c[2] === null || c[2] === undefined) continue;
-      if (this.cells.size >= CONFIG.MAX_TERRAIN_POINTS) { this.capped = true; break; }
       const key = this.key(c[1], c[0]);
-      if (!this.cells.has(key)) { this.cells.set(key, Math.round(c[2])); added += 1; }
+      if (this.cells.has(key)) continue;
+      if (this.cells.size >= CONFIG.MAX_TERRAIN_POINTS) {
+        /* Full. Drop the oldest cells rather than refuse the new one. Refusing
+         * meant the store kept whichever area was seen first and never learned
+         * another, which is no use once routes are plotted anywhere. */
+        this.evictOldest(Math.ceil(CONFIG.MAX_TERRAIN_POINTS * CONFIG.TERRAIN_EVICT_FRACTION));
+        this.capped = true;
+      }
+      this.cells.set(key, Math.round(c[2]));
+      added += 1;
     }
     if (added) { this.dirty = true; this.decoded = []; }
     return added;
+  }
+
+  /* Map keeps insertion order, so the front of it is the least recently seen. */
+  evictOldest(count) {
+    const keys = this.cells.keys();
+    for (let i = 0; i < count; i += 1) {
+      const next = keys.next();
+      if (next.done) break;
+      this.cells.delete(next.value);
+    }
+    this.decoded = [];
+    this.dirty = true;
   }
 
   points() {
     if (this.decoded.length !== this.cells.size) {
       this.decoded = [];
       for (const [key, ele] of this.cells) {
-        const { lat, lon } = TerrainStore.decodeKey(key, this.gridM);
+        const { lat, lon } = this.decodeKey(key);
         this.decoded.push([lat, lon, ele]);
       }
     }
     return this.decoded;
   }
 
+  /* Looks up the grid cells that could be in range instead of walking every
+   * cell held. The old scan was linear in the size of the whole store, which
+   * was tolerable for one city and is not once the store spans the country. */
   within(lat, lon, radiusM) {
-    const dlat = radiusM / M_PER_DEG_LAT;
-    const dlon = radiusM / M_PER_DEG_LON;
     const out = [];
-    for (const p of this.points()) {
-      if (p[0] >= lat - dlat && p[0] <= lat + dlat && p[1] >= lon - dlon && p[1] <= lon + dlon) {
-        if (haversineM(lat, lon, p[0], p[1]) <= radiusM) out.push(p);
+    const span = Math.ceil(radiusM / this.gridM) + 1;
+    const centreRow = this.rowOf(lat);
+    for (let row = centreRow - span; row <= centreRow + span; row += 1) {
+      const rowLat = this.latOfRow(row);
+      const perDeg = mPerDegLon(rowLat);
+      const centreCol = this.colOf(lon, rowLat);
+      for (let col = centreCol - span; col <= centreCol + span; col += 1) {
+        const ele = this.cells.get(`${row},${col}`);
+        if (ele === undefined) continue;
+        const cellLon = (col * this.gridM) / perDeg;
+        if (haversineM(lat, lon, rowLat, cellLon) <= radiusM) out.push([rowLat, cellLon, ele]);
       }
     }
     return out;
@@ -324,11 +368,10 @@ export class OrsClient {
        * looking exactly like being offline. Say so rather than guess. */
       throw new OrsError(
         'Could not reach OpenRouteService, and the browser will not say why. '
-        + 'The usual causes are a dropped connection, the per minute or daily '
-        + 'limit being reached, or a key that was refused. A refusal arrives '
-        + 'without the headers a browser needs, which makes it look identical '
-        + 'to being offline. Check your usage on your openrouteservice.org '
-        + 'dashboard.',
+        + 'A refusal arrives without the headers a browser needs, so an '
+        + 'exhausted allowance, a rejected key and a dropped connection all '
+        + 'look identical from here. Settings has a "Test the connection" '
+        + 'button that works out which of them it is.',
       );
     }
 
@@ -371,7 +414,12 @@ export function parseRoute(featureCollection) {
   if (summary.distance === undefined) {
     throw new OrsError('OpenRouteService returned a route with no distance summary.');
   }
-  return { coords, distanceM: Number(summary.distance) };
+  /* way_points gives the index, within the geometry, of each point that was
+   * asked for. That is what tells a tap on the drawn line which pair of your
+   * own points it falls between, which straight line geometry cannot: a route
+   * that doubles back passes close to segments it does not belong to. */
+  const wayPoints = (features[0].properties && features[0].properties.way_points) || [];
+  return { coords, distanceM: Number(summary.distance), wayPoints };
 }
 
 // --- candidates and scoring ------------------------------------------------
@@ -833,21 +881,24 @@ export function formatDuration(seconds) {
 }
 
 // --- geocoding -------------------------------------------------------------
-/* Place search, constrained to the Sheffield bounding box so you get Crookes in
- * S10 rather than Crookes in Queensland. This is a separate ORS endpoint with
- * its own quota, so it never spends the routing budget. */
-export async function geocode(text, apiKey, fetchImpl = null) {
+/* Place search. This used to be hard bounded to a Sheffield rectangle, which
+ * kept Crookes in S10 ahead of Crookes in Queensland but also made anywhere
+ * else unreachable. It now biases towards wherever the map is looking rather
+ * than excluding everywhere else, so near things still win without the rest of
+ * the world being off limits. Separate ORS endpoint with its own quota, so it
+ * never spends the routing budget. */
+export async function geocode(text, apiKey, { focus = null, fetchImpl = null } = {}) {
   const query = String(text || '').trim();
   if (query.length < 2) return [];
   if (!apiKey) throw new OrsError('No OpenRouteService API key set. Add one in Settings.');
 
-  const b = CONFIG.BBOX;
+  const near = focus && Number.isFinite(focus.lat) && Number.isFinite(focus.lon)
+    ? focus
+    : CONFIG.DEFAULT_START;
   const url = `${CONFIG.ORS_BASE_URL}/geocode/search`
     + `?api_key=${encodeURIComponent(apiKey)}`
     + `&text=${encodeURIComponent(query)}`
-    + `&boundary.rect.min_lon=${b.minLon}&boundary.rect.min_lat=${b.minLat}`
-    + `&boundary.rect.max_lon=${b.maxLon}&boundary.rect.max_lat=${b.maxLat}`
-    + `&focus.point.lon=${CONFIG.DEFAULT_START.lon}&focus.point.lat=${CONFIG.DEFAULT_START.lat}`
+    + `&focus.point.lon=${near.lon}&focus.point.lat=${near.lat}`
     + `&size=${CONFIG.GEOCODE_RESULTS}`;
 
   const doFetch = fetchImpl || ((...args) => globalThis.fetch(...args));
@@ -870,4 +921,570 @@ export async function geocode(text, apiKey, fetchImpl = null) {
     lat: f.geometry.coordinates[1],
     lon: f.geometry.coordinates[0],
   }));
+}
+
+// --- connection diagnosis ---------------------------------------------------
+/* When a fetch rejects, the browser tells the page nothing: a refused key, an
+ * exhausted quota and a dropped connection are one indistinguishable failure.
+ * On a phone there is no Network tab to fall back on, so the app has to work
+ * out the difference by sending requests that fail in different ways.
+ *
+ * The control probe is the important one. It sends a routing request with a
+ * key that cannot possibly be valid. If that refusal comes back readable, then
+ * refusals are visible here, and a failure that is NOT readable cannot be one. */
+
+const DIAG_POINT = { lat: 53.3736, lon: -1.5040 };
+const DIAG_BAD_KEY = 'ors-diagnostic-control-invalid';
+
+function failureDetail(err) {
+  const name = (err && err.name) || 'Error';
+  const text = (err && err.message) || String(err);
+  return `${name}: ${text}`;
+}
+
+export async function diagnose(apiKey, fetchImpl = null, pause = sleep) {
+  const doFetch = fetchImpl || ((...args) => globalThis.fetch(...args));
+  const results = [];
+
+  const routingRequest = (key) => doFetch(
+    `${CONFIG.ORS_BASE_URL}/v2/directions/${CONFIG.ORS_PROFILE}/geojson`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: key,
+        'Content-Type': 'application/json; charset=utf-8',
+        Accept: 'application/geo+json',
+      },
+      body: JSON.stringify({
+        coordinates: [
+          [DIAG_POINT.lon, DIAG_POINT.lat],
+          [DIAG_POINT.lon + 0.004, DIAG_POINT.lat],
+        ],
+        elevation: true,
+        units: 'm',
+      }),
+    },
+  );
+
+  const placeRequest = () => doFetch(
+    `${CONFIG.ORS_BASE_URL}/geocode/search`
+    + `?api_key=${encodeURIComponent(apiKey)}&text=Crookes&size=1`,
+    { method: 'GET' },
+  );
+
+  const probes = [
+    {
+      id: 'place',
+      label: 'Place search',
+      note: 'key in the address, no preflight, separate quota',
+      send: placeRequest,
+    },
+    {
+      id: 'refused',
+      label: 'Routing with a deliberately wrong key',
+      note: 'the control: shows what a refusal looks like from here',
+      send: () => routingRequest(DIAG_BAD_KEY),
+    },
+    {
+      id: 'routing',
+      label: 'Routing with your key',
+      note: 'the real request shape, costs one routing request',
+      send: () => routingRequest(apiKey),
+    },
+  ];
+
+  for (const probe of probes) {
+    const entry = { id: probe.id, label: probe.label, note: probe.note };
+    try {
+      const response = await probe.send();
+      entry.outcome = 'answered';
+      entry.status = response.status;
+    } catch (err) {
+      entry.outcome = 'blocked';
+      entry.detail = failureDetail(err);
+    }
+    results.push(entry);
+    if (probe !== probes[probes.length - 1]) await pause(1600);
+  }
+
+  return results;
+}
+
+/* Turn the pattern into a verdict. Kept separate from the sending so it can be
+ * tested against every combination without touching the network. */
+export function readDiagnosis(results) {
+  const by = (id) => results.find((r) => r.id === id) || {};
+  const place = by('place');
+  const control = by('refused');
+  const routing = by('routing');
+
+  const answered = (p) => p.outcome === 'answered';
+  const ok = (p) => answered(p) && p.status < 400;
+
+  if (ok(routing)) {
+    return {
+      verdict: 'working',
+      text: 'Routing answered normally just now, so the key, the quota and the '
+        + 'connection are all fine at this moment. The earlier failures were '
+        + 'either temporary or specific to the round trip request. Try a search.',
+    };
+  }
+
+  if (routing.status === 403) {
+    return {
+      verdict: 'refused',
+      text: 'OpenRouteService refused the routing request outright (403). That '
+        + 'is either the daily routing allowance being spent or the key not '
+        + 'being accepted. The allowance resets 24 hours after the first '
+        + 'request of the day. Your dashboard on openrouteservice.org shows '
+        + 'which of the two it is.',
+    };
+  }
+
+  if (routing.status === 429) {
+    return {
+      verdict: 'rate-limited',
+      text: 'The per minute limit was hit (429). Wait a minute and try again.',
+    };
+  }
+
+  if (answered(routing)) {
+    return {
+      verdict: 'error',
+      text: `Routing answered with HTTP ${routing.status}, so the connection and `
+        + 'the key are fine and the request itself was rejected. That is a bug '
+        + 'in the app rather than anything you have done.',
+    };
+  }
+
+  /* Routing was blocked. What the control did decides what that means. */
+  if (answered(control)) {
+    return {
+      verdict: 'not-a-refusal',
+      text: 'This is the useful one. A deliberately wrong key came back '
+        + `readable (HTTP ${control.status}), so refusals ARE visible to the app `
+        + 'from your phone. Your own routing request was not readable at all, '
+        + 'which means it is not being refused for quota or for the key. '
+        + 'Something is stopping the request before it gets an answer: the '
+        + 'network dropping it, or the routing service itself being down. '
+        + 'Worth retrying on a different connection, mobile data against wifi.',
+    };
+  }
+
+  if (ok(place)) {
+    return {
+      verdict: 'likely-quota',
+      text: 'Place search answered, so your connection works and your key is '
+        + 'accepted. Routing was blocked and so was the control, which means '
+        + 'refusals are invisible here, so a refusal is exactly what this looks '
+        + 'like. Place search and routing have separate allowances, so a good '
+        + 'place search does not clear the routing one. Most likely the daily '
+        + 'routing allowance is spent. It resets 24 hours after your first '
+        + 'request of the day, and your openrouteservice.org dashboard confirms it.',
+    };
+  }
+
+  if (answered(place)) {
+    return {
+      verdict: 'key',
+      text: `Place search answered with HTTP ${place.status} and routing was `
+        + 'blocked. A readable refusal on place search points at the key being '
+        + 'rejected rather than the connection. Worth pasting the key again.',
+    };
+  }
+
+  return {
+    verdict: 'unreachable',
+    text: 'Nothing answered, not even a request with a deliberately wrong key. '
+      + 'Requests are not reaching OpenRouteService at all. That is the '
+      + 'connection, or something on the network blocking the requests. Try '
+      + 'mobile data instead of wifi, or the other way round.',
+  };
+}
+
+// --- hand plotted routes ---------------------------------------------------
+/* Routes you place yourself, rather than ones the search generates. Each point
+ * is snapped to the path network by the routing service, so the line stays a
+ * route you could actually run and the elevation is real rather than guessed. */
+
+export const MIN_PLOTTED_POINTS = 2;
+
+export async function routeThrough(client, waypoints, { closeLoop = false } = {}) {
+  const points = (waypoints || []).filter(
+    (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon),
+  );
+  if (points.length < MIN_PLOTTED_POINTS) {
+    throw new OrsError('A route needs at least two points.');
+  }
+  const ordered = closeLoop ? [...points, points[0]] : points;
+  const data = await client.directions(ordered.map((p) => [p.lon, p.lat]));
+  const { coords, distanceM, wayPoints } = parseRoute(data);
+  const { ascent, descent } = ascentDescentFromCoords(coords);
+  return {
+    coords, distanceM, wayPoints, closeLoop,
+    ascentM: ascent, descentM: descent,
+    waypoints: points.map((p) => ({ lat: p.lat, lon: p.lon })),
+  };
+}
+
+/* Distance from a point to a line segment, in metres. Local flat earth, which
+ * is accurate well past the length of any segment this is used on. */
+export function distanceToSegmentM(p, a, b) {
+  const scale = Math.cos((p.lat * Math.PI) / 180);
+  const x = (v) => v.lon * scale * M_PER_DEG_LAT;
+  const y = (v) => v.lat * M_PER_DEG_LAT;
+  const px = x(p); const py = y(p);
+  const ax = x(a); const ay = y(a);
+  const bx = x(b); const by = y(b);
+  const dx = bx - ax; const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/* Which point of the drawn geometry is nearest to a tap. */
+export function nearestCoordIndex(coords, lat, lon) {
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < coords.length; i += 1) {
+    const d = haversineM(lat, lon, coords[i][1], coords[i][0]);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return { index: best, distanceM: bestD };
+}
+
+/* Where a new point belongs in the list you placed. Uses the geometry indices
+ * when the routing service supplied them, and falls back to straight lines
+ * between your points when it did not. */
+export function insertionIndex(route, lat, lon) {
+  const waypoints = (route && route.waypoints) || [];
+  if (waypoints.length < 2) return waypoints.length;
+
+  const wayPoints = (route.wayPoints || []).slice();
+  const coords = route.coords || [];
+  if (wayPoints.length >= 2 && coords.length) {
+    const { index } = nearestCoordIndex(coords, lat, lon);
+    for (let i = 0; i < wayPoints.length - 1; i += 1) {
+      if (index >= wayPoints[i] && index <= wayPoints[i + 1]) return i + 1;
+    }
+    return waypoints.length;
+  }
+
+  const target = { lat, lon };
+  const legs = route.closeLoop ? waypoints.length : waypoints.length - 1;
+  let best = 1;
+  let bestD = Infinity;
+  for (let i = 0; i < legs; i += 1) {
+    const d = distanceToSegmentM(target, waypoints[i], waypoints[(i + 1) % waypoints.length]);
+    if (d < bestD) { bestD = d; best = i + 1; }
+  }
+  return best;
+}
+
+export function insertWaypoint(waypoints, index, point) {
+  const out = waypoints.slice();
+  out.splice(Math.max(0, Math.min(out.length, index)), 0, { lat: point.lat, lon: point.lon });
+  return out;
+}
+
+export function moveWaypoint(waypoints, index, point) {
+  if (index < 0 || index >= waypoints.length) return waypoints.slice();
+  const out = waypoints.slice();
+  out[index] = { lat: point.lat, lon: point.lon };
+  return out;
+}
+
+export function removeWaypoint(waypoints, index) {
+  if (index < 0 || index >= waypoints.length) return waypoints.slice();
+  const out = waypoints.slice();
+  out.splice(index, 1);
+  return out;
+}
+
+// --- saved routes ----------------------------------------------------------
+/* Routes kept in this browser. Coordinates dominate the size of a route, so
+ * they are rounded and stored flat rather than as objects: a 10 km route holds
+ * roughly a thousand points, and the difference between the two is the
+ * difference between comfortably fitting and competing with the terrain store
+ * for the same few megabytes.
+ *
+ * Every write reports whether it worked. Browser storage fills up and refuses
+ * silently, and a save button that quietly does nothing is worse than one that
+ * says it could not. */
+
+const LIBRARY_VERSION = 1;
+
+function roundTo(value, places) {
+  const f = 10 ** places;
+  return Math.round(value * f) / f;
+}
+
+export function packRoute(route, { name = 'Route', id = null, savedAt = null } = {}) {
+  const p = CONFIG.COORD_PRECISION;
+  const points = [];
+  (route.coords || []).forEach((c) => {
+    points.push(roundTo(c[0], p), roundTo(c[1], p), Math.round(c[2] === undefined ? 0 : c[2]));
+  });
+  return {
+    v: LIBRARY_VERSION,
+    id: id || `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+    name: String(name || 'Route').slice(0, 80),
+    savedAt: savedAt || new Date().toISOString(),
+    distanceM: Math.round(route.distanceM || 0),
+    ascentM: Math.round(route.ascentM || 0),
+    descentM: Math.round(route.descentM || 0),
+    closeLoop: Boolean(route.closeLoop),
+    plotted: Boolean(route.waypoints && route.waypoints.length),
+    wp: (route.waypoints || []).map((w) => [roundTo(w.lat, p), roundTo(w.lon, p)]),
+    pts: points,
+  };
+}
+
+export function unpackRoute(stored) {
+  const coords = [];
+  const pts = stored.pts || [];
+  for (let i = 0; i + 2 < pts.length; i += 3) coords.push([pts[i], pts[i + 1], pts[i + 2]]);
+  return {
+    id: stored.id,
+    name: stored.name,
+    savedAt: stored.savedAt,
+    coords,
+    distanceM: stored.distanceM,
+    ascentM: stored.ascentM,
+    descentM: stored.descentM,
+    closeLoop: Boolean(stored.closeLoop),
+    waypoints: (stored.wp || []).map(([lat, lon]) => ({ lat, lon })),
+    wayPoints: [],
+  };
+}
+
+export class RouteLibrary {
+  constructor({ storage = null, limit = CONFIG.SAVED_ROUTES_LIMIT } = {}) {
+    this.storage = storage;
+    this.limit = limit;
+    this.routes = [];
+    this.load();
+  }
+
+  load() {
+    if (!this.storage) return;
+    let raw = null;
+    try { raw = this.storage.getItem(STORAGE.routes); } catch { return; }
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      const list = Array.isArray(parsed) ? parsed : (parsed.routes || []);
+      this.routes = list.filter((r) => r && r.v === LIBRARY_VERSION && Array.isArray(r.pts));
+    } catch { this.routes = []; }
+  }
+
+  get size() { return this.routes.length; }
+
+  list() {
+    return this.routes.map((r) => ({
+      id: r.id,
+      name: r.name,
+      savedAt: r.savedAt,
+      distanceM: r.distanceM,
+      ascentM: r.ascentM,
+      descentM: r.descentM,
+      plotted: Boolean(r.plotted),
+      points: Math.floor((r.pts || []).length / 3),
+    }));
+  }
+
+  get(id) {
+    const found = this.routes.find((r) => r.id === id);
+    return found ? unpackRoute(found) : null;
+  }
+
+  has(name) {
+    const wanted = String(name).trim().toLowerCase();
+    return this.routes.some((r) => r.name.trim().toLowerCase() === wanted);
+  }
+
+  /* Returns { ok, reason, id }. Never throws: a full browser store is an
+   * ordinary outcome that the interface has to be able to explain. */
+  save(route, name) {
+    if (!route || !(route.coords || []).length) {
+      return { ok: false, reason: 'There is no route to save yet.' };
+    }
+    if (this.routes.length >= this.limit && !this.has(name)) {
+      return {
+        ok: false,
+        reason: `That is ${this.limit} saved routes, which is as many as this `
+          + 'browser will hold. Delete one first.',
+      };
+    }
+    const existing = this.routes.find(
+      (r) => r.name.trim().toLowerCase() === String(name).trim().toLowerCase(),
+    );
+    const packed = packRoute(route, {
+      name,
+      id: existing ? existing.id : null,
+      savedAt: new Date().toISOString(),
+    });
+
+    const before = this.routes.slice();
+    if (existing) this.routes = this.routes.map((r) => (r.id === packed.id ? packed : r));
+    else this.routes = [packed, ...this.routes];
+
+    const written = this.write();
+    if (!written.ok) { this.routes = before; return written; }
+    return { ok: true, id: packed.id, replaced: Boolean(existing) };
+  }
+
+  remove(id) {
+    const before = this.routes.slice();
+    this.routes = this.routes.filter((r) => r.id !== id);
+    if (this.routes.length === before.length) return { ok: true, removed: false };
+    const written = this.write();
+    if (!written.ok) { this.routes = before; return written; }
+    return { ok: true, removed: true };
+  }
+
+  write() {
+    if (!this.storage) return { ok: true };
+    try {
+      this.storage.setItem(STORAGE.routes, JSON.stringify({ routes: this.routes }));
+      return { ok: true };
+    } catch {
+      return {
+        ok: false,
+        reason: 'This browser would not save the route. Its storage is full, and '
+          + 'the terrain store is usually what has filled it. Clearing the '
+          + 'terrain store in Settings frees the space, at the cost of the '
+          + 'elevation the app has collected.',
+      };
+    }
+  }
+}
+
+// --- elevation tiles -------------------------------------------------------
+/* Free global elevation, as PNG tiles where the colour of a pixel encodes the
+ * height of the ground under it. One tile is a few kilometres square and holds
+ * tens of thousands of samples, against the handful a single route donates, so
+ * the app can know the shape of an area before it has ever run there.
+ *
+ * These feed waypoint choice and the hills layer only. What the app reports as
+ * distance and climb still comes from the routing service. */
+
+export const TILE_SIZE = 256;
+
+export function lonToTileX(lon, z) { return ((lon + 180) / 360) * 2 ** z; }
+
+export function latToTileY(lat, z) {
+  const r = (lat * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z;
+}
+
+export function tileXToLon(x, z) { return (x / 2 ** z) * 360 - 180; }
+
+export function tileYToLat(y, z) {
+  const n = Math.PI - (2 * Math.PI * y) / 2 ** z;
+  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+}
+
+/* The encoding these tiles use. Heights below zero are real: the dataset
+ * carries sea floor depth as well as land, so open water reads well below 0. */
+export function decodeTerrarium(r, g, b) { return r * 256 + g + b / 256 - 32768; }
+
+export function tilePixelMetres(lat, z) {
+  return (40075016.686 * Math.cos((lat * Math.PI) / 180)) / 2 ** z / TILE_SIZE;
+}
+
+export function tileUrl(template, z, x, y) {
+  return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+}
+
+/* Which tiles cover a circle, nearest the middle first, so that truncating the
+ * list to a limit keeps the ground closest to where you are. */
+export function tilesCovering(lat, lon, radiusM, z) {
+  const dLat = (radiusM / 111320) * 1.02;
+  const dLon = dLat / Math.max(0.05, Math.cos((lat * Math.PI) / 180));
+  const x0 = Math.floor(lonToTileX(lon - dLon, z));
+  const x1 = Math.floor(lonToTileX(lon + dLon, z));
+  const y0 = Math.floor(latToTileY(lat + dLat, z));
+  const y1 = Math.floor(latToTileY(lat - dLat, z));
+  const cx = lonToTileX(lon, z);
+  const cy = latToTileY(lat, z);
+  const out = [];
+  for (let x = x0; x <= x1; x += 1) {
+    for (let y = y0; y <= y1; y += 1) {
+      out.push({ x, y, z, d: Math.hypot(x + 0.5 - cx, y + 0.5 - cy) });
+    }
+  }
+  return out.sort((a, b) => a.d - b.d).map(({ x, y, z: tz }) => ({ x, y, z: tz }));
+}
+
+/* Reads a decoded tile onto the grid the terrain store already uses. Sampling
+ * every pixel would be wasted work and would fill the store from one area:
+ * the store rounds to its own grid anyway, so the stride matches it. */
+export function sampleTile({ x, y, z }, pixels, gridM) {
+  const { data, width = TILE_SIZE, height = TILE_SIZE } = pixels;
+  const channels = data.length >= width * height * 4 ? 4 : 3;
+  const north = tileYToLat(y, z);
+  const south = tileYToLat(y + 1, z);
+  const west = tileXToLon(x, z);
+  const east = tileXToLon(x + 1, z);
+  const midLat = (north + south) / 2;
+  const stride = Math.max(1, Math.round(gridM / tilePixelMetres(midLat, z)));
+
+  const out = [];
+  for (let py = 0; py < height; py += stride) {
+    const lat = north + ((south - north) * (py + 0.5)) / height;
+    for (let px = 0; px < width; px += stride) {
+      const i = (py * width + px) * channels;
+      const ele = decodeTerrarium(data[i], data[i + 1], data[i + 2]);
+      if (!Number.isFinite(ele) || ele < -500 || ele > 9000) continue;
+      const lon = west + ((east - west) * (px + 0.5)) / width;
+      out.push([lon, lat, ele]);
+    }
+  }
+  return out;
+}
+
+export class TerrainTiles {
+  constructor({
+    loadTile,
+    zoom = CONFIG.TERRAIN_TILE_ZOOM,
+    maxTiles = CONFIG.TERRAIN_TILE_MAX,
+    template = CONFIG.TERRAIN_TILE_URL,
+    sampleM = CONFIG.TERRAIN_TILE_SAMPLE_M,
+  } = {}) {
+    this.loadTile = loadTile;
+    this.zoom = zoom;
+    this.maxTiles = maxTiles;
+    this.template = template;
+    this.sampleM = sampleM;
+    this.seen = new Set();
+  }
+
+  key(t) { return `${t.z}/${t.x}/${t.y}`; }
+
+  /* Fills the store with the ground around a point. Returns what happened
+   * rather than throwing: elevation makes the search better, and a search
+   * without it has to still run. */
+  async harvest(store, lat, lon, radiusM) {
+    if (!this.loadTile) return { fetched: 0, added: 0, failed: 0, skipped: 0, truncated: false };
+    const wanted = tilesCovering(lat, lon, radiusM, this.zoom);
+    const truncated = wanted.length > this.maxTiles;
+    const take = wanted.slice(0, this.maxTiles);
+
+    let fetched = 0; let added = 0; let failed = 0; let skipped = 0;
+    for (const tile of take) {
+      const id = this.key(tile);
+      if (this.seen.has(id)) { skipped += 1; continue; }
+      try {
+        const pixels = await this.loadTile(tileUrl(this.template, tile.z, tile.x, tile.y), tile);
+        if (!pixels || !pixels.data) { failed += 1; continue; }
+        added += store.addCoords(sampleTile(tile, pixels, this.sampleM));
+        this.seen.add(id);
+        fetched += 1;
+      } catch { failed += 1; }
+    }
+    return { fetched, added, failed, skipped, truncated };
+  }
 }

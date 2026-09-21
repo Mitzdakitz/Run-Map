@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>S10 route finder</title>
+<title>Contours</title>
 <meta name="theme-color" content="#1F5C4A">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="S10 Routes">
+<meta name="apple-mobile-web-app-title" content="Contours">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%231F5C4A'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='%231F5C4A'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -233,14 +233,134 @@
   .empty { padding: 22px 13px; text-align: center; color: var(--muted); font-size: 14px; }
 
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+/* Connection diagnosis. Deliberately plain: it is read once, when something is
+   wrong, and needs to be legible rather than decorative. */
+#diagnosis { margin-top: 10px; font-size: 14px; }
+#diagnosis .verdict {
+  padding: 10px 12px; border-radius: 8px; line-height: 1.45;
+  background: var(--sunken); border: 1px solid var(--line);
+}
+#diagnosis ul { list-style: none; margin: 10px 0 0; padding: 0; }
+#diagnosis li {
+  display: flex; gap: 8px; align-items: baseline;
+  padding: 5px 0; border-top: 1px solid var(--line);
+}
+#diagnosis .mark { flex: none; width: 1.1em; text-align: center; }
+#diagnosis .probe { flex: 1 1 auto; min-width: 0; }
+#diagnosis .probe .note { display: block; color: var(--muted); font-size: 12px; }
+#diagnosis .result { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); }
+/* --- plotting and saved routes --- */
+.map-tools {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 9px 13px 0;
+}
+.plot-bar {
+  display: grid; gap: 8px;
+  padding: 10px 13px; border-top: 1px solid var(--line-soft);
+  background: var(--sunken);
+}
+.plot-stats { margin: 0; font-size: 14px; font-weight: 600; }
+.plot-stats .num { font-variant-numeric: tabular-nums; }
+.plot-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.saved-list { display: grid; gap: 8px; }
+.saved-row {
+  display: flex; gap: 10px; align-items: center;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface);
+}
+.saved-row .what { flex: 1 1 auto; min-width: 0; }
+.saved-row .name {
+  display: block; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.saved-row .meta { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.saved-row .acts { flex: none; display: flex; gap: 6px; }
+
+/* --- the map follows you down the page on a phone --- */
+/* A sticky grid item only sticks inside its own row, and on one column every
+   panel is its own row, so the grid becomes ordinary blocks at this width. */
+@media (max-width: 899px) {
+  .grid { display: block; }
+  .grid > .panel { margin-bottom: 12px; }
+  .grid > .panel.map-panel {
+    position: sticky; top: 0; z-index: 400;
+    margin-bottom: 12px;
+  }
+  .map-panel #map { height: 36vh; transition: height 160ms ease; }
+  .map-panel.compact #map { height: 19vh; min-height: 140px; }
+}
+/* --- choosing how to make a route --- */
+.modes {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  padding: 8px; background: var(--sunken);
+  border-bottom: 1px solid var(--line-soft); border-radius: 10px 10px 0 0;
+}
+.mode {
+  display: block; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: 8px; font: inherit; font-weight: 650;
+  color: var(--ink); background: transparent; border: 1px solid transparent;
+}
+.mode span {
+  display: block; margin-top: 2px;
+  font-size: 12px; font-weight: 400; color: var(--muted);
+}
+.mode.on {
+  background: var(--surface); border-color: var(--line); box-shadow: var(--shadow);
+}
+.mode:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+@media (max-width: 420px) {
+  .modes { grid-template-columns: 1fr; }
+}
+/* --- the crosshair you aim with --- */
+/* Fixed to the middle of the map, never under the finger doing the panning,
+   which is the whole point: a fingertip hides the place it is aiming at. */
+.crosshair {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 450; pointer-events: none; line-height: 0;
+}
+.crosshair svg { display: block; }
+@media (prefers-reduced-motion: no-preference) {
+  .crosshair { transition: opacity 120ms ease; }
+}
+/* --- the padlock that stops a pan leaving points behind --- */
+.map-lock {
+  position: absolute; right: 10px; top: 10px; z-index: 460;
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; line-height: 1;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.map-lock[aria-pressed="true"] { color: var(--muted); }
+.map-lock:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+
+/* Off is shown three ways, not one: the button says so, the crosshair fades,
+   and a padlock appears in it. Opacity alone is not a state anyone can rely on. */
+.crosshair .lock-badge { display: none; }
+.crosshair.locked { opacity: 0.45; }
+.crosshair.locked .lock-badge {
+  display: block; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, 9px);
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>S10 route finder</h1>
+  <h1>Contours</h1>
 
   <section class="panel">
-    <div class="query">
+    <div class="modes" role="group" aria-label="How to make a route">
+      <button type="button" id="modeFind" class="mode on" aria-pressed="true">
+        Find me a route
+        <span>from a distance and a climb</span>
+      </button>
+      <button type="button" id="modePlot" class="mode" aria-pressed="false">
+        Plot my own
+        <span>tap the map, point by point</span>
+      </button>
+    </div>
+    <div class="query" id="findQuery">
       <button class="terms-summary" type="button" id="editSearch" aria-expanded="false" aria-controls="searchPanel">
         <span id="sumStart">Default start</span><span class="sep">/</span>
         <span class="num" id="sumDistance">5 km</span><span class="sep">/</span>
@@ -295,13 +415,60 @@
   <div id="messages"></div>
 
   <div class="grid">
-    <section class="panel">
+    <section class="panel map-panel">
       <div class="map-shell">
         <div id="map"></div>
+        <button type="button" class="map-lock" id="plotLock" hidden aria-pressed="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="10.5" width="16" height="11" rx="2"/>
+            <path id="shackle" d="M8 10.5V7a4 4 0 0 1 8 0"/>
+          </svg>
+          <span id="plotLockText">Placing on</span>
+        </button>
+        <div class="crosshair" id="crosshair" hidden aria-hidden="true">
+          <svg width="46" height="46" viewBox="0 0 46 46">
+            <g fill="none" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round">
+              <circle cx="23" cy="23" r="12"/>
+              <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
+            </g>
+            <g fill="none" stroke="#1F5C4A" stroke-width="2" stroke-linecap="round">
+              <circle cx="23" cy="23" r="12"/>
+              <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
+            </g>
+            <circle cx="23" cy="23" r="2.6" fill="#1F5C4A" stroke="#FFFFFF" stroke-width="1.4"/>
+          </svg>
+          <svg class="lock-badge" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="10" width="18" height="12" rx="2.5" fill="#FFFFFF"/>
+            <path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5" fill="none" stroke="#FFFFFF" stroke-width="4.5"/>
+            <path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5" fill="none" stroke="#5D6C65" stroke-width="2"/>
+            <rect x="4" y="11" width="16" height="10" rx="2" fill="#5D6C65"/>
+          </svg>
+        </div>
         <div class="map-legend">
           <span class="pill" id="startPill">Start</span>
           <span class="pill" id="dirPill" hidden>Clockwise</span>
         </div>
+      </div>
+      <div class="map-tools">
+        <button class="chip" type="button" id="mapSizeBtn" aria-pressed="false">Shrink map</button>
+      </div>
+      <div class="plot-bar" id="plotBar" hidden>
+        <p class="plot-stats" id="plotStats">Tap the map to place your first point.</p>
+        <div class="plot-actions">
+          <button class="chip" type="button" id="plotLoop" aria-pressed="false">Close the loop</button>
+          <button class="chip" type="button" id="plotUndo">Undo</button>
+          <button class="chip" type="button" id="plotClear">Clear</button>
+          <button class="chip" type="button" id="plotDone">Finish</button>
+        </div>
+        <p class="hint" id="plotHelp" style="margin:0">
+          Drag the map so the crosshair sits where you want to go, then let go: the point
+          lands there. Your finger never covers the spot you are aiming at. Tapping the map
+          works too. To look around without leaving points behind, turn placing off with the
+          padlock on the map; moving, inserting and removing points all still work while it
+          is off. Drag a point to move it, tap the line to add one in between, tap a point to
+          remove it. Save it under Saved routes below.
+        </p>
       </div>
       <div class="map-foot">
         <span id="budgetText">Tap the map to set your start</span>
@@ -319,6 +486,24 @@
         <div class="cards" id="cards"></div>
         <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
         <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
+      </div>
+    </section>
+
+    <section class="panel span-all">
+      <div class="head">
+        <h2>Saved routes</h2>
+        <span class="hint" id="savedCount"></span>
+      </div>
+      <div class="body">
+        <div class="field">
+          <input type="text" id="routeName" maxlength="80" autocomplete="off"
+                 placeholder="Name the route on screen" aria-label="Name for the route being saved">
+          <button type="button" class="primary" id="saveRouteBtn">Save</button>
+        </div>
+        <div class="saved-list" id="savedList"></div>
+        <div class="empty" id="savedEmpty">
+          Nothing saved yet. Search for a route or plot your own, then name it and press Save.
+        </div>
       </div>
     </section>
 
@@ -392,11 +577,13 @@
         </div>
       </div>
       <div class="chips">
+        <button class="chip" type="button" id="diagnose">Test the connection</button>
         <button class="chip" type="button" id="clearTerrain">Clear terrain store</button>
       </div>
+      <div id="diagnosis" hidden></div>
       <p class="hint" style="margin:0">
         Free key from <a href="https://openrouteservice.org/dev/#/signup" rel="noopener">openrouteservice.org</a>.
-        Routing and elevation by openrouteservice, map data &copy; OpenStreetMap contributors.
+        Routing and elevation by openrouteservice, map data &copy; OpenStreetMap contributors. Hill shading from Terrarium elevation tiles on AWS Open Data.
         Version <span class="num" id="appVersion">&mdash;</span>.
       </p>
     </div>
