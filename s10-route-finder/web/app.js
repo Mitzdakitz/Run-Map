@@ -154,6 +154,7 @@ function boot() {
       + 'Check that Leaflet loaded, then reload.');
   }
 
+  watchTheme();
   setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
 
   if (!read(STORAGE.key)) {
@@ -169,7 +170,20 @@ function boot() {
 /* Map overlays keep literal colours rather than theme tokens: OpenStreetMap
  * tiles are light in both themes, so the marks have to read on a light ground
  * whatever the page around them is doing. */
-const MAP_INK = '#1F5C4A';
+/* The map graphics are drawn by script, so the stylesheet cannot reach them.
+ * They read their colours out of it instead. This matters more than it did:
+ * the dark theme inverts the basemap tiles, so a colour chosen for a light map
+ * is wrong on a dark one. */
+function token(name, fallback) {
+  try {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return (value && value.trim()) || fallback;
+  } catch { return fallback; }
+}
+const mapInk = () => token('--route', '#4a5636');
+const mapDim = () => token('--route-dim', '#b09c86');
+const mapEnd = () => token('--route-end', '#8f4a22');
+const cursorInk = () => token('--cursor', '#4a3aa7');
 
 /* A chequered disc, so the point a loop begins and ends at is findable. On a
  * loop the line closes on itself and the start is otherwise invisible. */
@@ -179,8 +193,8 @@ function startFinishIcon() {
     iconSize: [28, 28],
     iconAnchor: [14, 14],
     html: `<svg width="28" height="28" viewBox="-14 -14 28 28" aria-hidden="true">
-             <circle r="12" fill="#FFFFFF" stroke="${MAP_INK}" stroke-width="2.5"/>
-             <g fill="${MAP_INK}">
+             <circle r="12" fill="#FFFFFF" stroke="${mapInk()}" stroke-width="2.5"/>
+             <g fill="${mapInk()}">
                <rect x="-6" y="-6" width="6" height="6"/>
                <rect x="0" y="0" width="6" height="6"/>
              </g>
@@ -196,12 +210,29 @@ function turnaroundIcon() {
     iconSize: [24, 24],
     iconAnchor: [12, 12],
     html: `<svg width="24" height="24" viewBox="-12 -12 24 24" aria-hidden="true">
-             <circle r="10" fill="#FFFFFF" stroke="${MAP_INK}" stroke-width="2"/>
+             <circle r="10" fill="#FFFFFF" stroke="${mapInk()}" stroke-width="2"/>
              <path d="M -3.5 4 L -3.5 -1 A 3.5 3.5 0 0 1 3.5 -1 L 3.5 3"
-                   fill="none" stroke="${MAP_INK}" stroke-width="2" stroke-linecap="round"/>
-             <path d="M 0.6 2.2 L 3.5 5.2 L 6.4 2.2 Z" fill="${MAP_INK}"/>
+                   fill="none" stroke="${mapInk()}" stroke-width="2" stroke-linecap="round"/>
+             <path d="M 0.6 2.2 L 3.5 5.2 L 6.4 2.2 Z" fill="${mapInk()}"/>
            </svg>`,
   });
+}
+
+/* Switching between the light and dark themes changes every colour the map
+ * graphics read, and the dark one inverts the basemap underneath them, so
+ * they have to be drawn again rather than left as they were. */
+function watchTheme() {
+  if (!globalThis.matchMedia) return;
+  let query;
+  try { query = globalThis.matchMedia('(prefers-color-scheme: dark)'); } catch { return; }
+  const redraw = () => {
+    if (!map) return;
+    drawRoutes(false);
+    drawPlot();
+    drawChart();
+  };
+  if (query.addEventListener) query.addEventListener('change', redraw);
+  else if (query.addListener) query.addListener(redraw);
 }
 
 function initMap() {
@@ -211,6 +242,9 @@ function initMap() {
   map = L.map('map', { zoomControl: true }).setView([start.lat, start.lon], CONFIG.DEFAULT_ZOOM);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
+    // The stylesheet washes the basemap warm. It must not catch the hills
+    // overlay, which shares this pane, so the wash is hung on this class.
+    className: 'basemap',
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(map);
 
@@ -235,18 +269,19 @@ function initMap() {
    * pan counts. A zoom is not a pan, and neither is a wobble on the way to a
    * tap, and either dropping a point would cost a routing request to undo. */
   map.on('dragstart', () => {
-    plot.panFrom = plot.active && !plot.locked ? map.getCenter() : null;
+    plot.panFrom = plot.active && !plot.locked ? aimPoint() : null;
   });
   map.on('dragend', () => {
     if (!plot.active || plot.locked || !plot.panFrom) return;
     const from = plot.panFrom;
     plot.panFrom = null;
     const zoom = map.getZoom();
-    const moved = map.project(map.getCenter(), zoom).distanceTo(map.project(from, zoom));
+    const now = aimPoint();
+    if (!now) return;
+    const moved = map.project(now, zoom).distanceTo(map.project(from, zoom));
     if (moved < CONFIG.PLOT_PAN_THRESHOLD_PX) return;
-    const centre = map.getCenter();
     plot.ignoreClicksUntil = Date.now() + 400;
-    addPlotPoint(centre.lat, centre.lng);
+    addPlotPoint(now.lat, now.lng);
   });
   map.on('zoomend', () => { if (activeProfile.length) drawArrows(); });
 }
@@ -283,6 +318,18 @@ function renderKeyState() {
 }
 
 // --- messages --------------------------------------------------------------
+/* These buttons are an icon plus a hidden label, so their text cannot be set
+ * by replacing the whole contents: that would throw the icon away. */
+function setToolLabel(button, on, offText, onText) {
+  const text = on ? onText : offText;
+  button.setAttribute('aria-pressed', String(on));
+  button.setAttribute('aria-label', text);
+  button.title = text;
+  const label = button.querySelector ? button.querySelector('.label') : null;
+  if (label) label.textContent = text;
+  else button.textContent = text;
+}
+
 function message(kind, text) {
   const div = document.createElement('div');
   div.className = `msg ${kind}`;
@@ -801,7 +848,7 @@ function drawRoutes(fit) {
     const latLngs = c.coords.map((p) => [p[1], p[0]]);
     const isSelected = i === selected.route;
     const line = L.polyline(latLngs, {
-      color: isSelected ? '#1F5C4A' : '#6E837A',
+      color: isSelected ? mapInk() : mapDim(),
       weight: isSelected ? 5 : 2.5,
       opacity: isSelected ? 0.95 : 0.6,
     }).addTo(map);
@@ -867,8 +914,8 @@ function drawArrows() {
       iconSize: [22, 22],
       iconAnchor: [11, 11],
       html: `<svg width="22" height="22" viewBox="-11 -11 22 22" style="transform:rotate(${angle}deg)">
-               <circle r="9" fill="#FFFFFF" stroke="#1F5C4A" stroke-width="1.6"/>
-               <path d="M 0 -5 L 4.5 4 L 0 1.6 L -4.5 4 Z" fill="#1F5C4A"/>
+               <circle r="9" fill="#FFFFFF" stroke="${mapInk()}" stroke-width="1.6"/>
+               <path d="M 0 -5 L 4.5 4 L 0 1.6 L -4.5 4 Z" fill="${mapInk()}"/>
              </svg>`,
     });
     L.marker([points[index].lat, points[index].lon], { icon, interactive: false, keyboard: false })
@@ -1016,7 +1063,7 @@ function moveCursor(clientX) {
   if (!map) return;
   if (!routeLayer.cursor) {
     routeLayer.cursor = L.circleMarker([point.lat, point.lon], {
-      radius: 7, color: '#FFFFFF', weight: 2.5, fillColor: '#4a3aa7', fillOpacity: 1, interactive: false,
+      radius: 7, color: '#FFFFFF', weight: 2.5, fillColor: cursorInk(), fillOpacity: 1, interactive: false,
     }).addTo(map);
   } else {
     routeLayer.cursor.setLatLng([point.lat, point.lon]);
@@ -1219,8 +1266,7 @@ async function toggleTerrain(on) {
   if (harvested && harvested.failed && !harvested.fetched && store.size === before) {
     message('warn', 'The elevation tiles would not load, so the hills cannot be drawn. '
       + 'They come from a free service with no key, which is occasionally unavailable.');
-    $('terrainBtn').setAttribute('aria-pressed', 'false');
-    $('terrainBtn').textContent = 'Show hills';
+    setToolLabel($('terrainBtn'), false, 'Show hills', 'Hide hills');
     return;
   }
 
@@ -1247,18 +1293,39 @@ async function toggleTerrain(on) {
 
 // --- geocoding -------------------------------------------------------------
 // --- plotting your own route ----------------------------------------------
+/* Where the crosshair actually is, which is no longer the middle of the map:
+ * the sheet covers the lower part of the screen, so the crosshair sits higher
+ * to stay in the visible strip. Reading its real position keeps the promise
+ * that the point lands where you were aiming, wherever the design puts it. */
+function aimPoint() {
+  if (!map) return null;
+  const centre = map.getCenter();
+  const marker = $('crosshair');
+  const container = map.getContainer ? map.getContainer() : null;
+  if (!marker || !container || !container.getBoundingClientRect) return centre;
+  try {
+    const box = container.getBoundingClientRect();
+    const cross = marker.getBoundingClientRect();
+    if (!box.width || !cross.width) return centre;
+    return map.containerPointToLatLng([
+      cross.left + cross.width / 2 - box.left,
+      cross.top + cross.height / 2 - box.top,
+    ]);
+  } catch { return centre; }
+}
+
 function plotIcon(index, total) {
   const first = index === 0;
   const last = index === total - 1 && total > 1;
-  const fill = first ? MAP_INK : (last ? '#8e2f24' : '#FFFFFF');
-  const ink = first || last ? '#FFFFFF' : MAP_INK;
+  const fill = first ? mapInk() : (last ? mapEnd() : '#FFFFFF');
+  const ink = first || last ? '#FFFFFF' : mapInk();
   const label = first ? 'S' : (last && !plot.closeLoop ? 'F' : String(index + 1));
   return L.divIcon({
     className: '',
     iconSize: [22, 22],
     iconAnchor: [11, 11],
     html: `<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">`
-      + `<circle cx="11" cy="11" r="9" fill="${fill}" stroke="${MAP_INK}" stroke-width="2"/>`
+      + `<circle cx="11" cy="11" r="9" fill="${fill}" stroke="${mapInk()}" stroke-width="2"/>`
       + `<text x="11" y="15" text-anchor="middle" font-size="10" font-weight="700"`
       + ` font-family="system-ui,sans-serif" fill="${ink}">${label}</text></svg>`,
   });
@@ -1281,7 +1348,7 @@ function drawPlot() {
 
   if (plot.route && plot.route.coords.length) {
     const latLngs = plot.route.coords.map((c) => [c[1], c[0]]);
-    plot.line = L.polyline(latLngs, { color: MAP_INK, weight: 5, opacity: 0.95 }).addTo(map);
+    plot.line = L.polyline(latLngs, { color: mapInk(), weight: 5, opacity: 0.95 }).addTo(map);
     if (plot.active) {
       plot.hit = L.polyline(latLngs, {
         color: '#000', opacity: 0, weight: 24, className: 'route-hit',
@@ -1761,8 +1828,7 @@ function wireEvents() {
 
   $('terrainBtn').addEventListener('click', function terrain() {
     const on = this.getAttribute('aria-pressed') !== 'true';
-    this.setAttribute('aria-pressed', String(on));
-    this.textContent = on ? 'Hide hills' : 'Show hills';
+    setToolLabel(this, on, 'Show hills', 'Hide hills');
     toggleTerrain(on);
   });
 
@@ -1794,6 +1860,12 @@ function wireEvents() {
     scheduleReroute();
   });
   $('plotLock').addEventListener('click', () => setPlotLock(!plot.locked));
+
+  $('settingsJump').addEventListener('click', () => {
+    $('settingsPanel').open = true;
+    const scroller = document.querySelector('.scroll');
+    if (scroller && scroller.scrollTo) scroller.scrollTo({ top: 1e6, behavior: 'smooth' });
+  });
   $('saveRouteBtn').addEventListener('click', saveCurrentRoute);
   $('routeName').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') saveCurrentRoute();
@@ -1802,8 +1874,7 @@ function wireEvents() {
     const panel = document.querySelector('.map-panel');
     const compact = !panel.classList.contains('compact');
     panel.classList.toggle('compact', compact);
-    this.setAttribute('aria-pressed', String(compact));
-    this.textContent = compact ? 'Grow map' : 'Shrink map';
+    setToolLabel(this, compact, 'Shrink map', 'Grow map');
     // Leaflet caches the size of its box, so it has to be told it changed.
     if (map) setTimeout(() => map.invalidateSize(), 200);
   });

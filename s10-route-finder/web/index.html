@@ -4,140 +4,438 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Contours</title>
-<meta name="theme-color" content="#1F5C4A">
+<meta name="theme-color" content="#c67139">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Contours">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%231F5C4A'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='%231F5C4A'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%23c67139'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' fill='%23c67139'/><path d='M8 46 L22 26 L32 36 L44 16 L56 30' stroke='%23fff' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Figtree:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
+  /* ============================================================
+     Contours — map-first glass bento.
+     The map is the whole window; everything else floats on frosted
+     warm glass above it. Palette, type and radii from the Organic
+     design system. Every id and every class app.js touches is kept.
+     ============================================================ */
   :root {
     color-scheme: light dark;
-    --ground:#E9EDEA; --surface:#FFFFFF; --sunken:#F3F6F3; --ink:#16201C; --muted:#5D6C65;
-    --line:#D1D9D4; --line-soft:#E2E8E4;
-    --accent:#1F5C4A; --accent-ink:#FFFFFF; --ghost:#6E837A;
-    --good:#0E5C39; --good-bg:#DCEDE3; --bad:#8E3325; --bad-bg:#F6E3DF;
-    --warn-bg:#FBF0DC; --warn-ink:#6B4F14;
+
+    /* Organic ground and ink */
+    --ground:#efe3cf; --ink:#201e1d; --muted:#6a5f53; --faint:#8a7d6f;
+
+    /* Glass: the only surface in this design */
+    --glass:rgba(252,246,236,.66);
+    --glass-strong:rgba(255,252,246,.80);
+    --glass-tile:rgba(255,252,246,.78);
+    --glass-line:rgba(255,255,255,.80);
+    --line:rgba(90,70,48,.16);
+    --line-soft:rgba(90,70,48,.10);
+    --sunken:rgba(90,70,48,.07);
+    --blur:blur(22px) saturate(1.5);
+    --shadow:0 8px 30px rgba(70,48,24,.16);
+    --shadow-lift:0 -6px 46px rgba(70,48,24,.20);
+
+    /* Accents */
+    --accent:#c67139; --accent-ink:#ffffff; --accent-deep:#8f4a22; --accent-tint:rgba(198,113,57,.14);
+    --accent-2:#7a8a5e; --accent-2-deep:#4a5636; --accent-2-tint:rgba(122,138,94,.16);
+    --ghost:#b09c86;
+
+    --good:#41552c; --good-bg:rgba(122,138,94,.20);
+    --bad:#8f3a22;  --bad-bg:rgba(198,80,40,.15);
+    --warn-bg:rgba(224,164,95,.22); --warn-ink:#7a4a16;
+
     /* Diverging gradient scale: both arms validated as ordinal ramps, the
-       cross-midpoint pairs clear the CVD and normal-vision floors. */
+       cross-midpoint pairs clear the CVD and normal-vision floors. Unchanged. */
     --dn2:#184f95; --dn1:#5598e7; --flat:#6E736E;
     --up1:#e8a05a; --up2:#d03b3b; --up3:#8e2f24;
     /* Reserved instrument hue: the scrub cursor and nothing else. */
     --cursor:#4a3aa7;
-    --shadow:0 1px 2px rgba(20,35,28,.06), 0 6px 18px rgba(20,35,28,.05);
+
+    /* Read by app.js for the things it draws onto the map itself. Kept here so
+       the map graphics follow the theme rather than being fixed in script. */
+    --route:#4a5636; --route-dim:#b09c86; --route-end:#8f4a22;
+
+    --r-sm:12px; --r:18px; --r-lg:24px; --r-sheet:30px;
+    --map-wash:sepia(.34) saturate(.78) hue-rotate(-8deg) brightness(1.06) contrast(.94);
+    --map-under:#e6d9c3;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --ground:#0E1412; --surface:#171E1B; --sunken:#131A17; --ink:#E4EBE7; --muted:#93A29A;
-      --line:#29332E; --line-soft:#212A26;
-      --accent:#64BC9C; --accent-ink:#0E1412; --ghost:#7E918A;
-      --good:#6FC496; --good-bg:#163023; --bad:#E08A77; --bad-bg:#331C17;
-      --warn-bg:#2E2617; --warn-ink:#E3C583;
+      --ground:#1b1815; --ink:#f3e9da; --muted:#c3b5a3; --faint:#a6968a;
+      --glass:rgba(38,32,27,.62);
+      --glass-strong:rgba(48,40,34,.72);
+      --glass-tile:rgba(255,236,208,.08);
+      --glass-line:rgba(255,236,208,.16);
+      --line:rgba(255,236,208,.14);
+      --line-soft:rgba(255,236,208,.09);
+      --sunken:rgba(255,236,208,.07);
+      --blur:blur(22px) saturate(1.3);
+      --shadow:0 8px 30px rgba(0,0,0,.45);
+      --shadow-lift:0 -6px 46px rgba(0,0,0,.5);
+      --accent:#d98244; --accent-ink:#241d17; --accent-deep:#e6a067; --accent-tint:rgba(217,130,68,.18);
+      --accent-2:#a8bb86; --accent-2-deep:#c3d6a1; --accent-2-tint:rgba(168,187,134,.20);
+      --ghost:#8a7c6d;
+      --good:#c3d6a1; --good-bg:rgba(168,187,134,.22);
+      --bad:#efa588;  --bad-bg:rgba(224,122,80,.20);
+      --warn-bg:rgba(237,179,106,.18); --warn-ink:#edb36a;
       --dn2:#4A90D9; --dn1:#8FC8E8; --flat:#8A918B; --up1:#EDB36A; --up2:#E07A50; --up3:#C8503A;
       --cursor:#9085e9;
-      --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+      --route:#c3d6a1; --route-dim:#8a7c6d; --route-end:#e6a067;
+      --map-wash:invert(.92) hue-rotate(178deg) saturate(.45) brightness(.94) contrast(1.05);
+      --map-under:#1b1815;
     }
   }
   :root[data-theme="dark"] {
-    --ground:#0E1412; --surface:#171E1B; --sunken:#131A17; --ink:#E4EBE7; --muted:#93A29A;
-    --line:#29332E; --line-soft:#212A26;
-    --accent:#64BC9C; --accent-ink:#0E1412; --ghost:#7E918A;
-    --good:#6FC496; --good-bg:#163023; --bad:#E08A77; --bad-bg:#331C17;
-    --warn-bg:#2E2617; --warn-ink:#E3C583;
+    --ground:#1b1815; --ink:#f3e9da; --muted:#c3b5a3; --faint:#a6968a;
+    --glass:rgba(38,32,27,.62);
+    --glass-strong:rgba(48,40,34,.72);
+    --glass-tile:rgba(255,236,208,.08);
+    --glass-line:rgba(255,236,208,.16);
+    --line:rgba(255,236,208,.14);
+    --line-soft:rgba(255,236,208,.09);
+    --sunken:rgba(255,236,208,.07);
+    --blur:blur(22px) saturate(1.3);
+    --shadow:0 8px 30px rgba(0,0,0,.45);
+    --shadow-lift:0 -6px 46px rgba(0,0,0,.5);
+    --accent:#d98244; --accent-ink:#241d17; --accent-deep:#e6a067; --accent-tint:rgba(217,130,68,.18);
+    --accent-2:#a8bb86; --accent-2-deep:#c3d6a1; --accent-2-tint:rgba(168,187,134,.20);
+    --ghost:#8a7c6d;
+    --good:#c3d6a1; --good-bg:rgba(168,187,134,.22);
+    --bad:#efa588;  --bad-bg:rgba(224,122,80,.20);
+    --warn-bg:rgba(237,179,106,.18); --warn-ink:#edb36a;
     --dn2:#4A90D9; --dn1:#8FC8E8; --flat:#8A918B; --up1:#EDB36A; --up2:#E07A50; --up3:#C8503A;
     --cursor:#9085e9;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+    --route:#c3d6a1; --route-dim:#8a7c6d; --route-end:#e6a067;
+    --map-wash:invert(.92) hue-rotate(178deg) saturate(.45) brightness(.94) contrast(1.05);
+    --map-under:#1b1815;
   }
 
   * { box-sizing: border-box; }
-  html, body { margin: 0; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
   body {
     background: var(--ground); color: var(--ink);
-    font: 400 15px/1.5 "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font: 400 15px/1.5 "Figtree", ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
-  }
-  .wrap {
-    max-width: 1120px; margin: 0 auto;
-    padding-inline: 16px;
-    padding-block: calc(16px + env(safe-area-inset-top, 0px)) calc(32px + env(safe-area-inset-bottom, 0px));
-    display: grid; gap: 12px;
+    overflow: hidden;              /* the scroll layer owns scrolling */
+    overscroll-behavior: none;
   }
 
-  h1 { font-family: "Bricolage Grotesque", sans-serif; font-size: 23px; font-weight: 700; letter-spacing: -.02em; margin: 0; }
-  h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); margin: 0; }
-  .num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  h1 { font-family: "Caprasimo", ui-serif, serif; font-size: 21px; font-weight: 400; letter-spacing: -.01em; margin: 0; line-height: 1; }
+  h2 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); margin: 0; }
+  .num { font-variant-numeric: tabular-nums; }
   .hint { font-size: 13px; color: var(--muted); }
+  a { color: var(--accent-deep); }
+  a:hover { color: var(--accent); }
+  ::selection { background: var(--accent-tint); }
 
-  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
-  .panel .body { padding: 13px; display: grid; gap: 11px; }
-  .panel-split { border-top: 1px solid var(--line-soft); }
-  .panel > .head {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    padding: 10px 13px; border-bottom: 1px solid var(--line-soft);
+  /* ---------- the two layers ---------- */
+  .map-layer {
+    position: fixed; inset: 0; z-index: 0;
+    background: var(--map-under);
+  }
+  .scroll {
+    position: fixed; inset: 0; z-index: 10;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    /* minmax(0,1fr) rather than an implicit auto column. An auto track cannot
+       shrink below its content's minimum, so one row that will not wrap makes
+       every row wider than the screen and the whole page scrolls sideways. */
+    display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px));
+    pointer-events: none;          /* the map shows through the gaps */
+  }
+  .scroll > * { pointer-events: auto; min-width: 0; }
+  /* the window onto the map: transparent, and taps fall through to Leaflet */
+  .void { pointer-events: none; height: 34vh; min-height: 150px; }
+  .map-layer.compact ~ .scroll .void { height: 14vh; min-height: 80px; }
+
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    border: 1px solid var(--glass-line);
+    box-shadow: var(--shadow);
   }
 
-  /* --- query row: one line, never ragged --- */
-  .query { display: flex; align-items: center; gap: 8px; padding: 10px 13px; }
+  /* ---------- top bar ---------- */
+  .topbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-lg); }
+  .topbar h1 { padding-left: 6px; }
+  .modes { margin-left: auto; display: flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--accent-2-tint); }
+  .mode {
+    padding: 8px 16px; border-radius: 999px; border: 0; background: transparent;
+    font: 600 14px "Figtree", sans-serif; color: var(--accent-2-deep); cursor: pointer; white-space: nowrap;
+  }
+  .mode span { display: none; }          /* the sub-labels move into the sheet */
+  .mode.on { background: var(--accent-2); color: #fff; box-shadow: 0 2px 8px rgba(80,95,55,.35); }
+  :root[data-theme="dark"] .mode.on, :root:not([data-theme="light"]) .mode.on { color: #241d17; }
+  .icon-btn {
+    flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+    border-radius: 999px; border: 1px solid var(--glass-line); background: var(--sunken);
+    color: var(--ink); cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--accent-tint); }
+
+  /* ---------- query pill ---------- */
+  .query { display: flex; align-items: center; gap: 8px; padding: 7px 7px 7px 6px; border-radius: 999px; }
   .terms-summary {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
-    font: inherit; font-size: 14px; min-height: 44px; padding: 0 12px; border-radius: 8px;
-    background: var(--sunken); border: 1px solid var(--line); cursor: pointer; color: inherit;
-    overflow: hidden; white-space: nowrap;
+    font: 600 15px "Figtree", sans-serif; min-height: 40px; padding: 0 14px; border-radius: 999px;
+    background: transparent; border: 0; cursor: pointer; color: var(--ink);
+    overflow: hidden; white-space: nowrap; text-align: left;
+    /* A button centres its contents, so an overflowing line gets clipped at
+       both ends and the first word goes missing as readily as the last. */
+    justify-content: flex-start;
   }
-  .terms-summary .sep { color: var(--line); }
-  .terms-summary .cue { margin-left: auto; font-size: 12px; color: var(--muted); padding-left: 8px; }
-  .terms-summary:hover { border-color: var(--muted); }
+  /* The start name is the long, variable part, so it is the part that gives
+     way. The figures and the Edit cue stay whole. */
+  .terms-summary #sumStart { flex: 0 1 auto; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; }
+  .terms-summary .sep, .terms-summary .num, .terms-summary #sumShape, .terms-summary .cue { flex: none; }
+  .terms-summary .sep { color: var(--ink); opacity: .3; font-weight: 400; }
+  .terms-summary #sumClimb { color: var(--accent-deep); }
+  .terms-summary .cue { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--faint); padding-left: 8px; }
+  .terms-summary:hover { background: var(--sunken); }
 
-  .field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .field-grid label { display: grid; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-  .field { display: flex; gap: 8px; }
-  input, select {
-    font: inherit; font-size: 16px; min-height: 44px; padding: 0 10px; width: 100%; min-width: 0;
-    color: var(--ink); background: var(--sunken); border: 1px solid var(--line); border-radius: 8px;
-  }
-  input::placeholder { color: var(--muted); }
-
+  /* ---------- controls ---------- */
   button {
-    font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; border-radius: 8px;
-    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
-    min-height: 44px; padding: 0 14px;
+    font: 600 15px "Figtree", sans-serif; cursor: pointer; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--glass-tile); color: var(--ink);
+    min-height: 44px; padding: 0 16px;
     display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap;
   }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-  button:hover { border-color: var(--muted); }
-  button.primary:hover { filter: brightness(1.06); }
-  button.small { font-size: 13px; padding: 0 11px; }
+  button:hover { background: var(--accent-tint); border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; box-shadow: 0 3px 12px rgba(150,80,35,.30); }
+  button.primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+  button.small { font-size: 13px; padding: 0 13px; }
   button[disabled] { opacity: .45; cursor: not-allowed; }
-  :focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  input, select {
+    font: 400 16px "Figtree", sans-serif; min-height: 44px; padding: 0 14px; width: 100%; min-width: 0;
+    color: var(--ink); background: var(--sunken); border: 1px solid var(--line); border-radius: 999px;
+  }
+  select { padding-right: 8px; }
+  input::placeholder { color: var(--faint); }
+  input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .field-grid label { display: grid; gap: 5px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
+  .field { display: flex; gap: 8px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
   .chip {
-    font: inherit; font-size: 13px; min-height: 44px; padding: 0 13px; border-radius: 999px;
-    border: 1px solid var(--line); background: var(--sunken); color: var(--ink); cursor: pointer;
+    font: 600 14px "Figtree", sans-serif; min-height: 44px; padding: 0 15px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--glass-tile); color: var(--ink); cursor: pointer;
     display: inline-flex; align-items: center; gap: 6px;
   }
-  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .chip[aria-pressed="true"] { background: var(--accent-2-tint); border-color: var(--accent-2); color: var(--accent-2-deep); }
   .chip .x { color: currentColor; opacity: .6; font-size: 15px; }
 
+  /* ---------- floating map controls ---------- */
+  .map-tools {
+    position: fixed; right: 10px; z-index: 20;
+    top: calc(env(safe-area-inset-top, 0px) + 138px);
+    display: grid; gap: 8px; justify-items: end;
+  }
+  .map-tools .chip {
+    width: 46px; height: 46px; min-height: 46px; padding: 0; justify-content: center;
+    border-radius: var(--r); background: var(--glass);
+    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    border: 1px solid var(--glass-line); box-shadow: var(--shadow);
+    overflow: hidden; color: var(--ink);
+  }
+  .map-tools .chip .label { display: none; }
+  .map-tools .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+  /* ---------- the sheet ---------- */
+  .sheet {
+    border-radius: var(--r-sheet);
+    box-shadow: var(--shadow-lift);
+    padding: 10px 12px 16px;
+    display: grid; gap: 10px;
+    min-height: 56vh;
+  }
+  .grabber { width: 44px; height: 5px; border-radius: 999px; background: var(--ink); opacity: .18; margin: 2px auto 6px; }
+
+  /* every former panel is now a bento tile on the sheet */
+  .tile {
+    border-radius: var(--r-lg);
+    background: var(--glass-tile);
+    border: 1px solid var(--glass-line);
+    padding: 14px 16px;
+    display: grid; gap: 11px;
+  }
+  .tile > .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .tile.quiet { background: transparent; border-color: transparent; padding: 0; }
+  .bento { display: grid; gap: 8px; grid-template-columns: 1fr; }
+  @media (min-width: 760px) {
+    .scroll { padding-inline: max(16px, calc(50vw - 560px)); }
+    .bento { grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); align-items: start; }
+    .bento > .span-all { grid-column: 1 / -1; }
+    .void { height: 46vh; }
+  }
+
+  /* ---------- results ---------- */
+  .cards { display: grid; gap: 8px; }
+  .group-heading { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-top: 6px; }
+  .card {
+    display: grid; grid-template-columns: 20px 1fr 74px; gap: 10px; align-items: center;
+    width: 100%; text-align: left; padding: 12px 14px; cursor: pointer; min-height: 44px;
+    background: var(--glass-strong); border: 1px solid var(--line); border-radius: var(--r); color: inherit;
+    font: 400 15px "Figtree", sans-serif;
+  }
+  .card[aria-current="true"] { border-color: var(--accent-2); border-width: 1.5px; padding: 11.5px 13.5px; background: var(--accent-2-tint); }
+  .card:hover { border-color: var(--accent); }
+  .pick {
+    width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--line);
+    display: grid; place-items: center; font-size: 12px; color: #fff;
+  }
+  .card[aria-current="true"] .pick { background: var(--accent-2); border-color: var(--accent-2); }
+  .card .title { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+  .card .dist { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .card .sub { font-size: 13px; margin-top: 1px; color: var(--muted); }
+  .card .err { font-size: 12px; color: var(--faint); margin-top: 1px; }
+  .spark { width: 74px; height: 34px; display: block; }
+  .badge {
+    font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 999px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .badge.good { background: var(--good-bg); color: var(--good); }
+  .badge.bad  { background: var(--bad-bg);  color: var(--bad); }
+
+  /* ---------- detail ---------- */
+  .summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 20px; }
+  .metric { display: flex; flex-direction: column; gap: 1px; }
+  .metric .v { font-family: "Caprasimo", ui-serif, serif; font-size: 30px; line-height: 1.05; letter-spacing: -.02em; }
+  .metric .k { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); margin-top: 3px; }
+  .metric .d { font-size: 13px; color: var(--muted); }
+  .detail { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+  .detail-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 13.5px; }
+  .detail-row .k { color: var(--muted); }
+
+  /* ---------- chart ---------- */
+  .chart { display: block; width: 100%; touch-action: pan-y; cursor: crosshair; }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+  #readout { font-size: 13px; color: var(--muted); min-width: 19ch; text-align: right; }
+  .scale { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .scale span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 14px; height: 8px; border-radius: 4px; display: inline-block; }
+
+  .empty { padding: 24px 14px; text-align: center; color: var(--muted); font-size: 14px; }
+
+  /* ---------- results list, saved, keys ---------- */
   .results-list { display: grid; gap: 4px; }
   .result-row {
     display: flex; justify-content: space-between; gap: 10px; align-items: center;
-    min-height: 44px; padding: 0 10px; border-radius: 8px; background: var(--sunken); cursor: pointer;
+    min-height: 44px; padding: 0 14px; border-radius: 999px; background: var(--sunken); cursor: pointer;
     border: 1px solid transparent; text-align: left; width: 100%; font: inherit; color: inherit;
   }
-  .result-row:hover { border-color: var(--line); }
+  .result-row:hover { border-color: var(--accent); }
   .result-row .where { font-size: 13px; color: var(--muted); flex: none; }
   .result-row .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .saved-list { display: grid; gap: 8px; }
+  .saved-row {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r);
+    background: var(--glass-strong);
+  }
+  .saved-row .what { flex: 1 1 auto; min-width: 0; }
+  .saved-row .name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .saved-row .meta { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .saved-row .acts { flex: none; display: flex; gap: 6px; }
 
   .key-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .key-row .hint { flex: 1; min-width: 12ch; }
 
-  /* --- loading runner --- */
+  /* ---------- plot mode ---------- */
+  .plot-bar { display: grid; gap: 10px; }
+  .plot-stats { margin: 0; font-family: "Caprasimo", ui-serif, serif; font-size: 22px; line-height: 1.15; letter-spacing: -.01em; }
+  .plot-stats .num { font-variant-numeric: tabular-nums; }
+  .plot-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .plot-actions #plotDone { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .plot-actions #plotDone:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+
+  .map-shell { position: absolute; inset: 0; }
+  #map { position: absolute; inset: 0; height: 100%; z-index: 0; background: var(--map-under); }
+  /* the tiles are washed so the glass sits on warm ground, not on OSM blue-grey.
+     Only the basemap: the hills overlay shares this pane, and washing that too
+     would turn an orange elevation ramp blue in the dark theme. */
+  .leaflet-tile-pane .basemap { filter: var(--map-wash); }
+  .leaflet-container { background: var(--map-under); }
+  .leaflet-control-attribution { font-family: "Figtree", sans-serif; background: var(--glass) !important; border-radius: 999px 0 0 0; }
+  /* Leaflet's own controls clear the floating glass */
+  .leaflet-top.leaflet-left { top: calc(env(safe-area-inset-top, 0px) + 138px); left: 2px; }
+  .leaflet-bar { border: 1px solid var(--glass-line) !important; border-radius: var(--r) !important; overflow: hidden; box-shadow: var(--shadow); }
+  .leaflet-bar a { background: var(--glass) !important; color: var(--ink) !important; border-bottom-color: var(--line) !important; }
+  .leaflet-bar a:hover { background: var(--accent-tint) !important; }
+  .arrow-icon, .sf-icon, .turn-icon { background: none; border: 0; }
+  .route-hit { pointer-events: stroke; }
+
+  .map-legend { position: fixed; left: 10px; z-index: 20; top: calc(env(safe-area-inset-top, 0px) + 218px); display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill {
+    font-size: 12px; font-weight: 600; padding: 6px 11px; border-radius: 999px;
+    background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    border: 1px solid var(--glass-line); color: var(--muted);
+  }
+  /* the legend sits with the floating controls, clear of the sheet */
+
+  .map-lock {
+    position: fixed; right: 10px; z-index: 22;
+    top: calc(env(safe-area-inset-top, 0px) + 138px);
+    display: flex; align-items: center; gap: 7px;
+    padding: 0 15px; height: 46px; border-radius: var(--r); cursor: pointer;
+    font: 700 14px "Figtree", sans-serif; line-height: 1;
+    color: var(--ink); background: var(--glass);
+    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    border: 1px solid var(--glass-line); box-shadow: var(--shadow);
+  }
+  .map-lock[aria-pressed="true"] { color: var(--muted); }
+  /* in plot mode the padlock takes the top slot and the tools drop below it */
+  body:has(#plotLock:not([hidden])) .map-tools { top: calc(env(safe-area-inset-top, 0px) + 192px); }
+  /* while the search form is open it owns the top of the screen */
+  body:has(#searchPanel:not([hidden])) .map-tools,
+  body:has(#searchPanel:not([hidden])) .map-lock,
+  body:has(#searchPanel:not([hidden])) .map-legend { display: none; }
+
+  .crosshair {
+    position: absolute; left: 50%; top: 42%;
+    transform: translate(-50%, -50%);
+    z-index: 450; pointer-events: none; line-height: 0;
+  }
+  .crosshair svg { display: block; }
+  @media (prefers-reduced-motion: no-preference) {
+    .crosshair { transition: opacity 120ms ease; }
+    .crosshair::before {
+      content: ""; position: absolute; left: 50%; top: 50%;
+      width: 72px; height: 72px; margin: -36px 0 0 -36px; border-radius: 50%;
+      border: 3px solid var(--accent); opacity: .5;
+      animation: pulseRing 2.2s ease-out infinite;
+    }
+  }
+  @keyframes pulseRing { 0% { transform: scale(.85); opacity: .55; } 70% { transform: scale(1.5); opacity: 0; } 100% { opacity: 0; } }
+  /* Off is shown three ways, not one: the button says so, the crosshair fades,
+     and a padlock appears in it. Opacity alone is not a state anyone can rely on. */
+  .crosshair .lock-badge { display: none; }
+  .crosshair.locked { opacity: 0.45; }
+  .crosshair.locked::before { display: none; }
+  .crosshair.locked .lock-badge {
+    display: block; position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, 9px);
+  }
+
+  /* ---------- foot, messages, loading ---------- */
+  .map-foot {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; align-items: center;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .quota-bar { height: 6px; border-radius: 999px; background: var(--sunken); overflow: hidden; width: 96px; }
+  .quota-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+
   .loading { display: flex; align-items: center; gap: 12px; }
   .runner { width: 34px; height: 34px; flex: none; color: var(--accent); }
   .runner g { opacity: 0; animation: runCycle .56s linear infinite; }
@@ -146,373 +444,193 @@
   .runner g:nth-of-type(3) { animation-delay: .28s; }
   .runner g:nth-of-type(4) { animation-delay: .42s; }
   @keyframes runCycle { 0%, 24.9% { opacity: 1; } 25%, 100% { opacity: 0; } }
-  /* Standing still rather than vanishing when motion is turned down. */
-  @media (prefers-reduced-motion: reduce) {
-    .runner g:nth-of-type(1) { opacity: 1; }
-  }
+  @media (prefers-reduced-motion: reduce) { .runner g:nth-of-type(1) { opacity: 1; } }
 
-  /* --- messages --- */
-  .msg { padding: 10px 12px; border-radius: 8px; font-size: 13.5px; }
+  .msg { padding: 12px 15px; border-radius: var(--r); font-size: 13.5px; }
   .msg.error { background: var(--bad-bg); color: var(--bad); }
   .msg.warn  { background: var(--warn-bg); color: var(--warn-ink); }
   .msg.info  { background: var(--sunken); color: var(--muted); }
   #messages { display: grid; gap: 8px; }
   #messages:empty { display: none; }
 
-  /* --- layout --- */
-  .grid { display: grid; gap: 12px; grid-template-columns: 1fr; align-items: start; }
-  @media (min-width: 900px) {
-    .grid { grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); }
-    .span-all { grid-column: 1 / -1; }
+  /* ---------- settings, folded away ---------- */
+  .settings { border-radius: var(--r-lg); background: transparent; border: 1px solid var(--line-soft); padding: 0; }
+  .settings > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 14px 16px; min-height: 44px;
   }
+  .settings > summary::-webkit-details-marker { display: none; }
+  .settings > summary::after {
+    content: ""; width: 9px; height: 9px; flex: none; margin-right: 4px;
+    border-right: 2.75px solid var(--faint); border-bottom: 2.75px solid var(--faint);
+    border-radius: 2px; transform: rotate(45deg) translate(-2px,-2px);
+  }
+  .settings[open] > summary::after { transform: rotate(225deg) translate(-2px,-2px); }
+  .settings .body { display: grid; gap: 11px; padding: 0 16px 16px; }
 
-  /* --- map --- */
-  .map-shell { position: relative; }
-  #map { height: 42vh; min-height: 260px; border-radius: 10px 10px 0 0; z-index: 0; }
-  @media (min-width: 900px) { #map { height: 460px; } }
-  .map-legend { position: absolute; left: 10px; bottom: 10px; z-index: 500; display: flex; gap: 6px; flex-wrap: wrap; }
-  .pill {
-    font-size: 11px; padding: 4px 8px; border-radius: 999px;
-    background: color-mix(in srgb, var(--surface) 90%, transparent);
-    border: 1px solid var(--line); color: var(--muted);
-  }
-  .map-foot {
-    display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; align-items: center;
-    font-size: 13px; color: var(--muted); padding: 9px 13px; border-top: 1px solid var(--line-soft);
-  }
-  .quota-bar { height: 5px; border-radius: 3px; background: var(--line-soft); overflow: hidden; width: 96px; }
-  .quota-bar i { display: block; height: 100%; background: var(--accent); }
-  .arrow-icon, .sf-icon, .turn-icon { background: none; border: 0; }
-  .route-hit { pointer-events: stroke; }
-
-  /* --- cards --- */
-  .cards { display: grid; gap: 8px; }
-  .group-heading { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-top: 6px; }
-  .card {
-    display: grid; grid-template-columns: 20px 1fr 74px; gap: 9px; align-items: center;
-    width: 100%; text-align: left; padding: 10px 11px; cursor: pointer; min-height: 44px;
-    background: var(--surface); border: 1px solid var(--line); border-radius: 9px; color: inherit; font: inherit;
-  }
-  .card[aria-current="true"] { border-color: var(--accent); border-width: 2px; padding: 9px 10px; background: var(--sunken); }
-  .card:hover { border-color: var(--muted); }
-  .pick {
-    width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--line);
-    display: grid; place-items: center; font-size: 12px; color: var(--accent-ink);
-  }
-  .card[aria-current="true"] .pick { background: var(--accent); border-color: var(--accent); }
-  .card .title { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
-  .card .dist { font-size: 15px; font-weight: 600; }
-  .card .sub { font-size: 13px; margin-top: 1px; }
-  .card .err { font-size: 11px; color: var(--muted); margin-top: 1px; }
-  .spark { width: 74px; height: 34px; display: block; }
-  .badge {
-    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; white-space: nowrap;
-    display: inline-flex; align-items: center; gap: 4px;
-  }
-  .badge.good { background: var(--good-bg); color: var(--good); }
-  .badge.bad  { background: var(--bad-bg);  color: var(--bad); }
-
-  /* --- detail --- */
-  .summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
-  .metric { display: flex; flex-direction: column; gap: 1px; }
-  .metric .v { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
-  .metric .k { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-  .metric .d { font-size: 13px; color: var(--muted); }
-  .detail { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
-  .detail-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 13px; }
-  .detail-row .k { color: var(--muted); }
-
-  /* --- chart --- */
-  .chart { display: block; width: 100%; touch-action: pan-y; cursor: crosshair; }
-  .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
-  #readout { font-size: 13px; color: var(--muted); min-width: 19ch; text-align: right; }
-  .scale { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
-  .scale span { display: inline-flex; align-items: center; gap: 5px; }
-  .swatch { width: 14px; height: 8px; border-radius: 2px; display: inline-block; }
-
-  .empty { padding: 22px 13px; text-align: center; color: var(--muted); font-size: 14px; }
+  #diagnosis { margin-top: 4px; font-size: 14px; }
+  #diagnosis .verdict { padding: 12px 15px; border-radius: var(--r); line-height: 1.45; background: var(--sunken); border: 1px solid var(--line); }
+  #diagnosis ul { list-style: none; margin: 10px 0 0; padding: 0; }
+  #diagnosis li { display: flex; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+  #diagnosis .mark { flex: none; width: 1.1em; text-align: center; }
+  #diagnosis .probe { flex: 1 1 auto; min-width: 0; }
+  #diagnosis .probe .note { display: block; color: var(--muted); font-size: 12px; }
+  #diagnosis .result { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); }
 
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-/* Connection diagnosis. Deliberately plain: it is read once, when something is
-   wrong, and needs to be legible rather than decorative. */
-#diagnosis { margin-top: 10px; font-size: 14px; }
-#diagnosis .verdict {
-  padding: 10px 12px; border-radius: 8px; line-height: 1.45;
-  background: var(--sunken); border: 1px solid var(--line);
-}
-#diagnosis ul { list-style: none; margin: 10px 0 0; padding: 0; }
-#diagnosis li {
-  display: flex; gap: 8px; align-items: baseline;
-  padding: 5px 0; border-top: 1px solid var(--line);
-}
-#diagnosis .mark { flex: none; width: 1.1em; text-align: center; }
-#diagnosis .probe { flex: 1 1 auto; min-width: 0; }
-#diagnosis .probe .note { display: block; color: var(--muted); font-size: 12px; }
-#diagnosis .result { flex: none; font-variant-numeric: tabular-nums; color: var(--muted); }
-/* --- plotting and saved routes --- */
-.map-tools {
-  display: flex; gap: 8px; flex-wrap: wrap;
-  padding: 9px 13px 0;
-}
-.plot-bar {
-  display: grid; gap: 8px;
-  padding: 10px 13px; border-top: 1px solid var(--line-soft);
-  background: var(--sunken);
-}
-.plot-stats { margin: 0; font-size: 14px; font-weight: 600; }
-.plot-stats .num { font-variant-numeric: tabular-nums; }
-.plot-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.saved-list { display: grid; gap: 8px; }
-.saved-row {
-  display: flex; gap: 10px; align-items: center;
-  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface);
-}
-.saved-row .what { flex: 1 1 auto; min-width: 0; }
-.saved-row .name {
-  display: block; font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.saved-row .meta { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.saved-row .acts { flex: none; display: flex; gap: 6px; }
-
-/* --- the map follows you down the page on a phone --- */
-/* A sticky grid item only sticks inside its own row, and on one column every
-   panel is its own row, so the grid becomes ordinary blocks at this width. */
-@media (max-width: 899px) {
-  .grid { display: block; }
-  .grid > .panel { margin-bottom: 12px; }
-  .grid > .panel.map-panel {
-    position: sticky; top: 0; z-index: 400;
-    margin-bottom: 12px;
-  }
-  .map-panel #map { height: 36vh; transition: height 160ms ease; }
-  .map-panel.compact #map { height: 19vh; min-height: 140px; }
-}
-/* --- choosing how to make a route --- */
-.modes {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
-  padding: 8px; background: var(--sunken);
-  border-bottom: 1px solid var(--line-soft); border-radius: 10px 10px 0 0;
-}
-.mode {
-  display: block; text-align: left; cursor: pointer;
-  padding: 9px 11px; border-radius: 8px; font: inherit; font-weight: 650;
-  color: var(--ink); background: transparent; border: 1px solid transparent;
-}
-.mode span {
-  display: block; margin-top: 2px;
-  font-size: 12px; font-weight: 400; color: var(--muted);
-}
-.mode.on {
-  background: var(--surface); border-color: var(--line); box-shadow: var(--shadow);
-}
-.mode:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
-@media (max-width: 420px) {
-  .modes { grid-template-columns: 1fr; }
-}
-/* --- the crosshair you aim with --- */
-/* Fixed to the middle of the map, never under the finger doing the panning,
-   which is the whole point: a fingertip hides the place it is aiming at. */
-.crosshair {
-  position: absolute; left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 450; pointer-events: none; line-height: 0;
-}
-.crosshair svg { display: block; }
-@media (prefers-reduced-motion: no-preference) {
-  .crosshair { transition: opacity 120ms ease; }
-}
-/* --- the padlock that stops a pan leaving points behind --- */
-.map-lock {
-  position: absolute; right: 10px; top: 10px; z-index: 460;
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 10px; border-radius: 8px; cursor: pointer;
-  font: inherit; font-size: 13px; font-weight: 600; line-height: 1;
-  color: var(--ink); background: var(--surface);
-  border: 1px solid var(--line); box-shadow: var(--shadow);
-}
-.map-lock[aria-pressed="true"] { color: var(--muted); }
-.map-lock:focus-visible { outline: 2px solid var(--cursor); outline-offset: 2px; }
-
-/* Off is shown three ways, not one: the button says so, the crosshair fades,
-   and a padlock appears in it. Opacity alone is not a state anyone can rely on. */
-.crosshair .lock-badge { display: none; }
-.crosshair.locked { opacity: 0.45; }
-.crosshair.locked .lock-badge {
-  display: block; position: absolute; left: 50%; top: 50%;
-  transform: translate(-50%, 9px);
-}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Contours</h1>
 
-  <section class="panel">
+<!-- Layer 1: the map is the app -->
+<div class="map-layer map-panel" id="mapLayer">
+  <div class="map-shell">
+    <div id="map"></div>
+    <div class="crosshair" id="crosshair" hidden aria-hidden="true">
+      <svg width="52" height="52" viewBox="0 0 46 46">
+        <g fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round">
+          <circle cx="23" cy="23" r="12"/>
+          <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
+        </g>
+        <g fill="none" stroke="#c67139" stroke-width="2.4" stroke-linecap="round">
+          <circle cx="23" cy="23" r="12"/>
+          <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
+        </g>
+        <circle cx="23" cy="23" r="2.8" fill="#c67139" stroke="#FFFFFF" stroke-width="1.5"/>
+      </svg>
+      <svg class="lock-badge" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="10" width="18" height="12" rx="4" fill="#FFFFFF"/>
+        <path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5" fill="none" stroke="#FFFFFF" stroke-width="4.5"/>
+        <path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5" fill="none" stroke="#6a5f53" stroke-width="2.4"/>
+        <rect x="4" y="11" width="16" height="10" rx="3" fill="#6a5f53"/>
+      </svg>
+    </div>
+    <div class="map-legend">
+      <span class="pill" id="startPill">Start</span>
+      <span class="pill" id="dirPill" hidden>Clockwise</span>
+    </div>
+  </div>
+</div>
+
+<!-- Floating map controls, above the scroll layer -->
+<button type="button" class="map-lock" id="plotLock" hidden aria-pressed="false">
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="4" y="10.5" width="16" height="11" rx="3"/>
+    <path id="shackle" d="M8 10.5V7a4 4 0 0 1 8 0"/>
+  </svg>
+  <span id="plotLockText">Placing on</span>
+</button>
+<div class="map-tools">
+  <button class="chip" type="button" id="terrainBtn" aria-pressed="false" title="Show hills" aria-label="Show hills">
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 3 4 8 5-5 5 15H2L8 3z"/></svg>
+    <span class="label">Show hills</span>
+  </button>
+  <button class="chip" type="button" id="mapSizeBtn" aria-pressed="false" title="Shrink map" aria-label="Shrink map">
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v5H3M16 21v-5h5M21 8h-5V3M3 16h5v5"/></svg>
+    <span class="label">Shrink map</span>
+  </button>
+</div>
+
+<!-- Layer 2: glass -->
+<div class="scroll">
+
+  <header class="topbar glass">
+    <h1>Contours</h1>
     <div class="modes" role="group" aria-label="How to make a route">
-      <button type="button" id="modeFind" class="mode on" aria-pressed="true">
-        Find me a route
-        <span>from a distance and a climb</span>
-      </button>
-      <button type="button" id="modePlot" class="mode" aria-pressed="false">
-        Plot my own
-        <span>tap the map, point by point</span>
+      <button type="button" id="modeFind" class="mode on" aria-pressed="true">Find<span>from a distance and a climb</span></button>
+      <button type="button" id="modePlot" class="mode" aria-pressed="false">Plot<span>tap the map, point by point</span></button>
+    </div>
+    <button type="button" class="icon-btn" id="settingsJump" aria-label="Settings">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="7" r="3"/><circle cx="7" cy="17" r="3"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="query glass" id="findQuery">
+    <button class="terms-summary" type="button" id="editSearch" aria-expanded="false" aria-controls="searchPanel">
+      <span id="sumStart">Default start</span><span class="sep">·</span>
+      <span class="num" id="sumDistance">5 km</span><span class="sep">·</span>
+      <span class="num" id="sumClimb">Medium</span><span class="sep">·</span>
+      <span id="sumShape">Loop</span>
+      <span class="cue" id="editCue">Edit</span>
+    </button>
+    <button class="primary" type="button" id="searchBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      Search
+    </button>
+  </div>
+
+  <div id="searchPanel" class="tile glass" hidden>
+    <div class="field-grid">
+      <label>Distance km
+        <input type="text" id="distance" inputmode="decimal" value="5" aria-label="Distance in km">
+      </label>
+      <label>Climb
+        <select id="climbPreset" aria-label="Climb preset"></select>
+      </label>
+      <label>Shape
+        <select id="shape" aria-label="Route shape">
+          <option value="loop">Loop</option>
+          <option value="out_and_back">Out and back</option>
+        </select>
+      </label>
+    </div>
+    <div class="field">
+      <input type="text" id="climbExact" inputmode="numeric" placeholder="Or exact metres of ascent" aria-label="Exact metres of ascent">
+    </div>
+    <div class="field">
+      <input type="search" id="placeSearch" placeholder="Start: search a place or postcode"
+             autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search for a start place">
+      <button type="button" class="primary" id="locateBtn" title="Use my current location">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2"/><path d="M12 2v3.4M12 18.6V22M22 12h-3.4M5.4 12H2"/>
+        </svg>
+        Locate
       </button>
     </div>
-    <div class="query" id="findQuery">
-      <button class="terms-summary" type="button" id="editSearch" aria-expanded="false" aria-controls="searchPanel">
-        <span id="sumStart">Default start</span><span class="sep">/</span>
-        <span class="num" id="sumDistance">5 km</span><span class="sep">/</span>
-        <span class="num" id="sumClimb">Medium</span><span class="sep">/</span>
-        <span id="sumShape">Loop</span>
-        <span class="cue" id="editCue">Edit</span>
-      </button>
-      <button class="primary" type="button" id="searchBtn">Search</button>
+    <div class="results-list" id="searchResults" hidden></div>
+    <div class="chips" id="savedStarts"></div>
+    <div class="field">
+      <input type="text" id="pace" inputmode="decimal" placeholder="Flat pace, e.g. 5:40" aria-label="Average flat pace in minutes per km">
+      <button type="button" class="small" id="clearPace">Clear</button>
     </div>
-    <div id="searchPanel" hidden>
-      <div class="body panel-split">
-        <div class="field-grid">
-          <label>Distance km
-            <input type="text" id="distance" inputmode="decimal" value="5" aria-label="Distance in km">
-          </label>
-          <label>Climb
-            <select id="climbPreset" aria-label="Climb preset"></select>
-          </label>
-          <label>Shape
-            <select id="shape" aria-label="Route shape">
-              <option value="loop">Loop</option>
-              <option value="out_and_back">Out and back</option>
-            </select>
-          </label>
-        </div>
-        <div class="field">
-          <input type="text" id="climbExact" inputmode="numeric" placeholder="Or exact metres of ascent" aria-label="Exact metres of ascent">
-        </div>
+    <p class="hint" style="margin:0">Leave pace blank and no times are shown anywhere.</p>
+  </div>
 
-        <div class="field">
-          <input type="search" id="placeSearch" placeholder="Start: search a place or postcode"
-                 autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search for a start place">
-          <button type="button" class="primary" id="locateBtn" title="Use my current location">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" aria-hidden="true">
-              <circle cx="12" cy="12" r="3.2"/><path d="M12 2v3.4M12 18.6V22M22 12h-3.4M5.4 12H2"/>
-            </svg>
-            Locate
-          </button>
-        </div>
-        <div class="results-list" id="searchResults" hidden></div>
-        <div class="chips" id="savedStarts"></div>
+  <div class="void" aria-hidden="true"></div>
 
-        <div class="field">
-          <input type="text" id="pace" inputmode="decimal" placeholder="Flat pace, e.g. 5:40" aria-label="Average flat pace in minutes per km">
-          <button type="button" class="small" id="clearPace">Clear</button>
-        </div>
-        <p class="hint" style="margin:0">Leave pace blank and no times are shown anywhere.</p>
+  <div class="sheet glass">
+    <div class="grabber" aria-hidden="true"></div>
+
+    <div id="messages"></div>
+
+    <div class="plot-bar tile" id="plotBar" hidden>
+      <p class="plot-stats" id="plotStats">Tap the map to place your first point.</p>
+      <div class="plot-actions">
+        <button class="chip" type="button" id="plotLoop" aria-pressed="false">Close the loop</button>
+        <button class="chip" type="button" id="plotUndo">Undo</button>
+        <button class="chip" type="button" id="plotClear">Clear</button>
+        <button class="chip" type="button" id="plotDone">Finish</button>
       </div>
+      <p class="hint" id="plotHelp" style="margin:0">
+        Drag the map so the crosshair sits where you want to go, then let go: the point
+        lands there. Your finger never covers the spot you are aiming at. Tapping the map
+        works too. To look around without leaving points behind, turn placing off with the
+        padlock on the map; moving, inserting and removing points all still work while it
+        is off. Drag a point to move it, tap the line to add one in between, tap a point to
+        remove it. Save it under Saved routes below.
+      </p>
     </div>
-  </section>
 
-  <div id="messages"></div>
+    <div class="bento">
 
-  <div class="grid">
-    <section class="panel map-panel">
-      <div class="map-shell">
-        <div id="map"></div>
-        <button type="button" class="map-lock" id="plotLock" hidden aria-pressed="false">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="4" y="10.5" width="16" height="11" rx="2"/>
-            <path id="shackle" d="M8 10.5V7a4 4 0 0 1 8 0"/>
-          </svg>
-          <span id="plotLockText">Placing on</span>
-        </button>
-        <div class="crosshair" id="crosshair" hidden aria-hidden="true">
-          <svg width="46" height="46" viewBox="0 0 46 46">
-            <g fill="none" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round">
-              <circle cx="23" cy="23" r="12"/>
-              <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
-            </g>
-            <g fill="none" stroke="#1F5C4A" stroke-width="2" stroke-linecap="round">
-              <circle cx="23" cy="23" r="12"/>
-              <path d="M23 1.5v7M23 37.5v7M1.5 23h7M37.5 23h7"/>
-            </g>
-            <circle cx="23" cy="23" r="2.6" fill="#1F5C4A" stroke="#FFFFFF" stroke-width="1.4"/>
-          </svg>
-          <svg class="lock-badge" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="10" width="18" height="12" rx="2.5" fill="#FFFFFF"/>
-            <path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5" fill="none" stroke="#FFFFFF" stroke-width="4.5"/>
-            <path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5" fill="none" stroke="#5D6C65" stroke-width="2"/>
-            <rect x="4" y="11" width="16" height="10" rx="2" fill="#5D6C65"/>
-          </svg>
+      <section class="tile span-all" id="detailPanel" hidden>
+        <div class="head">
+          <h2 id="detailTitle">Selected route</h2>
+          <button type="button" class="small" id="reverseBtn" aria-pressed="false">Reverse direction</button>
         </div>
-        <div class="map-legend">
-          <span class="pill" id="startPill">Start</span>
-          <span class="pill" id="dirPill" hidden>Clockwise</span>
-        </div>
-      </div>
-      <div class="map-tools">
-        <button class="chip" type="button" id="terrainBtn" aria-pressed="false">Show hills</button>
-        <button class="chip" type="button" id="mapSizeBtn" aria-pressed="false">Shrink map</button>
-      </div>
-      <div class="plot-bar" id="plotBar" hidden>
-        <p class="plot-stats" id="plotStats">Tap the map to place your first point.</p>
-        <div class="plot-actions">
-          <button class="chip" type="button" id="plotLoop" aria-pressed="false">Close the loop</button>
-          <button class="chip" type="button" id="plotUndo">Undo</button>
-          <button class="chip" type="button" id="plotClear">Clear</button>
-          <button class="chip" type="button" id="plotDone">Finish</button>
-        </div>
-        <p class="hint" id="plotHelp" style="margin:0">
-          Drag the map so the crosshair sits where you want to go, then let go: the point
-          lands there. Your finger never covers the spot you are aiming at. Tapping the map
-          works too. To look around without leaving points behind, turn placing off with the
-          padlock on the map; moving, inserting and removing points all still work while it
-          is off. Drag a point to move it, tap the line to add one in between, tap a point to
-          remove it. Save it under Saved routes below.
-        </p>
-      </div>
-      <div class="map-foot">
-        <span id="budgetText">Tap the map to set your start</span>
-        <div class="quota-bar" aria-hidden="true"><i id="quotaFill" style="width:0"></i></div>
-        <span id="quotaText"></span>
-      </div>
-    </section>
-
-    <section class="panel" id="resultsPanel">
-      <div class="head">
-        <h2 id="resultsHeading">Results</h2>
-      </div>
-      <div class="body">
-        <div class="cards" id="cards"></div>
-        <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
-        <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
-      </div>
-    </section>
-
-    <section class="panel span-all">
-      <div class="head">
-        <h2>Saved routes</h2>
-        <span class="hint" id="savedCount"></span>
-      </div>
-      <div class="body">
-        <div class="field">
-          <input type="text" id="routeName" maxlength="80" autocomplete="off"
-                 placeholder="Name the route on screen" aria-label="Name for the route being saved">
-          <button type="button" class="primary" id="saveRouteBtn">Save</button>
-        </div>
-        <div class="saved-list" id="savedList"></div>
-        <div class="empty" id="savedEmpty">
-          Nothing saved yet. Search for a route or plot your own, then name it and press Save.
-        </div>
-      </div>
-    </section>
-
-    <section class="panel span-all" id="detailPanel" hidden>
-      <div class="head">
-        <h2 id="detailTitle">Selected route</h2>
-        <button type="button" id="reverseBtn" aria-pressed="false">Reverse direction</button>
-      </div>
-      <div class="body">
         <div class="summary">
           <div class="metric">
             <span class="v num" id="mDist">&mdash;</span>
@@ -532,14 +650,6 @@
           <span class="badge bad" id="mBadge" style="margin-left:auto">&mdash;</span>
         </div>
 
-        <div class="detail">
-          <div class="detail-row"><span class="k">Longest sustained climb</span><span class="num" id="dLongest">&mdash;</span></div>
-          <div class="detail-row"><span class="k">Steepest 200 m</span><span class="num" id="dSteepest">&mdash;</span></div>
-          <div class="detail-row"><span class="k">Highest point</span><span class="num" id="dHigh">&mdash;</span></div>
-          <div class="detail-row"><span class="k">Total descent</span><span class="num" id="dDrop">&mdash;</span></div>
-          <div class="detail-row"><span class="k">Found by</span><span id="dStrategy">&mdash;</span></div>
-        </div>
-
         <div class="chart-head">
           <h2>Elevation</h2>
           <span id="readout">Drag across the chart</span>
@@ -553,41 +663,79 @@
           <span><i class="swatch" style="background:var(--up2)"></i> up 6&ndash;10%</span>
           <span><i class="swatch" style="background:var(--up3)"></i> up &gt;10%</span>
         </div>
-        <p class="hint" style="margin:0" id="chartNote"></p>
-      </div>
-    </section>
-  </div>
 
-  <section class="panel">
-    <div class="head">
-      <h2>Settings</h2>
-      <span class="hint" id="terrainCount"></span>
-    </div>
-    <div class="body">
-      <div id="keySaved" class="key-row" hidden>
-        <span class="hint">An OpenRouteService key is saved in this browser.</span>
-        <button type="button" class="small" id="changeKey">Change</button>
-        <button type="button" class="small" id="removeKey">Remove</button>
-      </div>
-      <div id="keyEntry">
-        <label class="hint" for="apiKey">OpenRouteService key. Stored in this browser only, and only ever sent to OpenRouteService.</label>
-        <div class="field" style="margin-top:6px">
-          <input type="password" id="apiKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
-          <button type="button" class="primary" id="saveKey">Save</button>
+        <div class="detail">
+          <div class="detail-row"><span class="k">Longest sustained climb</span><span class="num" id="dLongest">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Steepest 200 m</span><span class="num" id="dSteepest">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Highest point</span><span class="num" id="dHigh">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Total descent</span><span class="num" id="dDrop">&mdash;</span></div>
+          <div class="detail-row"><span class="k">Found by</span><span id="dStrategy">&mdash;</span></div>
         </div>
-      </div>
-      <div class="chips">
-        <button class="chip" type="button" id="diagnose">Test the connection</button>
-        <button class="chip" type="button" id="clearTerrain">Clear terrain store</button>
-      </div>
-      <div id="diagnosis" hidden></div>
-      <p class="hint" style="margin:0">
-        Free key from <a href="https://openrouteservice.org/dev/#/signup" rel="noopener">openrouteservice.org</a>.
-        Routing and elevation by openrouteservice, map data &copy; OpenStreetMap contributors. Hill shading from Terrarium elevation tiles on AWS Open Data.
-        Version <span class="num" id="appVersion">&mdash;</span>.
-      </p>
+        <p class="hint" style="margin:0" id="chartNote"></p>
+      </section>
+
+      <section class="tile" id="resultsPanel">
+        <div class="head">
+          <h2 id="resultsHeading">Results</h2>
+        </div>
+        <div class="cards" id="cards"></div>
+        <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
+        <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
+      </section>
+
+      <section class="tile">
+        <div class="head">
+          <h2>Saved routes</h2>
+          <span class="hint" id="savedCount"></span>
+        </div>
+        <div class="field">
+          <input type="text" id="routeName" maxlength="80" autocomplete="off"
+                 placeholder="Name the route on screen" aria-label="Name for the route being saved">
+          <button type="button" class="primary" id="saveRouteBtn">Save</button>
+        </div>
+        <div class="saved-list" id="savedList"></div>
+        <div class="empty" id="savedEmpty">
+          Nothing saved yet. Search for a route or plot your own, then name it and press Save.
+        </div>
+      </section>
+
     </div>
-  </section>
+
+    <div class="map-foot">
+      <span id="budgetText">Tap the map to set your start</span>
+      <div class="quota-bar" aria-hidden="true"><i id="quotaFill" style="width:0"></i></div>
+      <span id="quotaText"></span>
+    </div>
+
+    <details class="settings" id="settingsPanel">
+      <summary><h2>Settings</h2><span class="hint" id="terrainCount"></span></summary>
+      <div class="body">
+        <div id="keySaved" class="key-row" hidden>
+          <span class="hint">An OpenRouteService key is saved in this browser.</span>
+          <button type="button" class="small" id="changeKey">Change</button>
+          <button type="button" class="small" id="removeKey">Remove</button>
+        </div>
+        <div id="keyEntry">
+          <label class="hint" for="apiKey">OpenRouteService key. Stored in this browser only, and only ever sent to OpenRouteService.</label>
+          <div class="field" style="margin-top:6px">
+            <input type="password" id="apiKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="paste your key">
+            <button type="button" class="primary" id="saveKey">Save</button>
+          </div>
+        </div>
+        <div class="chips">
+          <button class="chip" type="button" id="diagnose">Test the connection</button>
+          <button class="chip" type="button" id="clearTerrain">Clear terrain store</button>
+        </div>
+        <div id="diagnosis" hidden></div>
+        <p class="hint" style="margin:0">
+          Free key from <a href="https://openrouteservice.org/dev/#/signup" rel="noopener">openrouteservice.org</a>.
+          Routing and elevation by openrouteservice, map data &copy; OpenStreetMap contributors. Hill shading from Terrarium elevation tiles on AWS Open Data.
+          Version <span class="num" id="appVersion">&mdash;</span>.
+        </p>
+      </div>
+    </details>
+
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
