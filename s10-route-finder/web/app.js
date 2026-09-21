@@ -1949,11 +1949,25 @@ function wireEvents() {
     message('info', 'Terrain store cleared. It rebuilds as you search.');
   });
 
+  /* Capturing a touch pointer hands the whole gesture to the chart, which
+   * overrides touch-action and stops the page scrolling under a finger. Once a
+   * route is plotted the chart fills most of the sheet, so that is exactly
+   * where a thumb lands and the page would not move. A mouse or pen drag has
+   * no other meaning here, so those are still captured; a finger is left to
+   * the scroller, and touch-action: pan-y lets it scrub across and scroll
+   * down. */
   const chart = $('chart');
-  chart.addEventListener('pointerdown', (e) => { chart.setPointerCapture(e.pointerId); moveCursor(e.clientX); });
-  chart.addEventListener('pointermove', (e) => { if (e.buttons || e.pointerType === 'mouse') moveCursor(e.clientX); });
+  chart.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' && chart.setPointerCapture) chart.setPointerCapture(e.pointerId);
+    moveCursor(e.clientX);
+  });
+  chart.addEventListener('pointermove', (e) => {
+    if (e.buttons || e.pointerType === 'mouse') moveCursor(e.clientX);
+  });
   chart.addEventListener('pointerup', hideCursor);
   chart.addEventListener('pointerleave', hideCursor);
+  // The browser sends this when it takes the gesture over for scrolling.
+  chart.addEventListener('pointercancel', hideCursor);
 }
 
 boot();
