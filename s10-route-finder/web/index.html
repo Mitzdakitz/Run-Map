@@ -290,8 +290,55 @@
     flex: 1 1 auto; min-height: 0;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+    /* minmax(0,1fr) for the same reason the layer above used to need it: an
+       auto track cannot shrink below its content's minimum, so one row that
+       will not wrap widens everything inside. It used to be the layer's
+       problem; making the sheet the scroller made it the sheet's. */
+    grid-template-columns: minmax(0, 1fr);
+    /* And the sheet only ever scrolls up and down. Asking for overflow-y: auto
+       computes overflow-x to auto as well, which turned that widening into a
+       sideways scroll rather than something that simply could not happen. */
+    overflow-x: hidden;
   }
-  .grabber { width: 44px; height: 5px; border-radius: 999px; background: var(--ink); opacity: .18; margin: 2px auto 6px; }
+  .grabber { display: block; width: 44px; height: 5px; border-radius: 999px; background: var(--ink); opacity: .18; margin: 0 auto; }
+  /* The pill was decoration. It is the way back to the map now, so it is a
+     button with a word on it: a label says what will happen, where a handle
+     you are meant to guess at does not, and a tap cannot be confused with the
+     scroll it sits on top of. */
+  .grabber-btn {
+    display: none; width: 100%; border: 0; background: none; color: var(--muted);
+    padding: 4px 0 6px; margin: 0; cursor: pointer; font: 600 12px "Figtree", sans-serif;
+    flex-direction: column; align-items: center; gap: 5px; min-height: 44px;
+  }
+  body.has-results .grabber-btn { display: flex; }
+  .grabber-btn:hover { color: var(--ink); }
+  .grabber-btn:hover .grabber { opacity: .34; }
+
+  /* ---------- peek: the map, with the chosen route's profile under it -----
+     Everything that is about choosing a route goes away; what is left is the
+     one route you picked, its numbers, and a strip of its elevation you can
+     still drag a finger across to see where you are on the map. */
+  body.sheet-peek .topbar,
+  body.sheet-peek #findQuery,
+  body.sheet-peek #searchPanel { display: none; }
+  /* The compact selector carries four classes and would otherwise outrank this
+     one, so a map that had been shrunk stayed shrunk when the sheet stood down. */
+  body.sheet-peek .void,
+  body.sheet-peek .map-layer.compact ~ .scroll .void { flex: 1 1 auto; height: auto; min-height: 0; }
+  body.sheet-peek .sheet { flex: 0 0 auto; }
+  /* Named by what stays rather than by what goes: the settings panel and the
+     footer are children of the sheet and not of the bento, so a rule that
+     listed the tiles to hide left 394px of them standing and the map with a
+     tenth of the screen. Anything added to the sheet later stands down too. */
+  body.sheet-peek .sheet > *:not(#sheetToggle):not(.bento),
+  body.sheet-peek .bento > *:not(#detailPanel) { display: none; }
+  body.sheet-peek #detailPanel > .head,
+  body.sheet-peek #detailPanel .chart-head,
+  body.sheet-peek #detailPanel .scale,
+  body.sheet-peek #detailPanel .detail,
+  body.sheet-peek #detailPanel #chartNote { display: none; }
+  /* The chart is redrawn at the shorter height rather than scaled to it, so
+     there is no height here: the attribute the renderer writes is the height. */
 
   /* every former panel is now a bento tile on the sheet */
   .tile {
@@ -301,9 +348,10 @@
     padding: 14px 16px;
     display: grid; gap: 11px;
   }
-  .tile > .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .tile, .tile > * { min-width: 0; }
+  .tile > .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
   .tile.quiet { background: transparent; border-color: transparent; padding: 0; }
-  .bento { display: grid; gap: 8px; grid-template-columns: 1fr; }
+  .bento { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); min-width: 0; }
   @media (min-width: 760px) {
     .scroll { padding-inline: max(16px, calc(50vw - 560px)); }
     .bento { grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); align-items: start; }
@@ -315,7 +363,11 @@
   .cards { display: grid; gap: 8px; }
   .group-heading { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-top: 6px; }
   .card {
-    display: grid; grid-template-columns: 20px 1fr 74px; gap: 10px; align-items: center;
+    /* minmax(0,...) on the middle track and min-width: 0 on the items. A grid
+       item's automatic minimum is its min-content width, so without these the
+       longest unbreakable thing in a card (the tolerance badge) sets a floor
+       the card cannot go below, and every card is wider than the phone. */
+    display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; align-items: center;
     width: 100%; text-align: left; padding: 12px 14px; cursor: pointer; min-height: 44px;
     background: var(--glass-strong); border: 1px solid var(--line); border-radius: var(--r); color: inherit;
     font: 400 15px "Figtree", sans-serif;
@@ -327,7 +379,8 @@
     display: grid; place-items: center; font-size: 12px; color: #fff;
   }
   .card[aria-current="true"] .pick { background: var(--accent-2); border-color: var(--accent-2); }
-  .card .title { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+  .card > * { min-width: 0; }
+  .card .title { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; min-width: 0; }
   .card .dist { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
   .card .sub { font-size: 13px; margin-top: 1px; color: var(--muted); }
   .card .err { font-size: 12px; color: var(--faint); margin-top: 1px; }
@@ -640,7 +693,11 @@
   <div class="void" aria-hidden="true"></div>
 
   <div class="sheet glass">
-    <div class="grabber" aria-hidden="true"></div>
+    <button class="grabber-btn" type="button" id="sheetToggle" aria-expanded="true"
+            title="Focus map" aria-label="Focus map">
+      <span class="grabber" aria-hidden="true"></span>
+      <span class="label">Focus map</span>
+    </button>
 
     <div id="messages"></div>
 

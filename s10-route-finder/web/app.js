@@ -160,6 +160,7 @@ function boot() {
 
   watchTheme();
   positionMapControls();
+  guardSheetGestures();
   whenIdle(() => { store.load(); refreshTerrainCount(); });
   setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
 
@@ -396,6 +397,46 @@ function bringIntoView(id) {
 function scrollSheet(top) {
   const scroller = sheetScroller();
   if (scroller && scroller.scrollTo) scroller.scrollTo({ top, behavior: 'smooth' });
+}
+
+/* Peek: the sheet stands down to a strip so the map can have the screen. What
+ * stays is the route you chose, its numbers and its elevation, which you can
+ * still drag a finger across; the cursor that puts on the map is the point of
+ * keeping it. A button rather than a draggable handle, because the sheet it
+ * sits on is itself a scroller and a gesture that means two things on the same
+ * pixels is how the scrolling broke in the first place. */
+function setPeek(on) {
+  if (!document.body || !document.body.classList) return;
+  document.body.classList.toggle('sheet-peek', on);
+  const button = $('sheetToggle');
+  if (button) {
+    button.setAttribute('aria-expanded', String(!on));
+    setToolLabel(button, on, 'Focus map', 'Show details');
+  }
+  // The strip is shorter than the panel, so the profile is drawn again to fit
+  // rather than scaled into it.
+  drawChart();
+  // The map's box just changed size and Leaflet caches that.
+  if (map) setTimeout(() => map.invalidateSize(), 220);
+}
+
+function peeking() {
+  return Boolean(document.body && document.body.classList
+    && document.body.classList.contains('sheet-peek'));
+}
+
+/* A drag that starts on the sheet belongs to the sheet, however far the finger
+ * travels. A touch target is supposed to be fixed at touchstart, but a scroll
+ * that carried on over the map panned the map along with it, so the map is
+ * taken out of the gesture for as long as the gesture lasts. */
+function guardSheetGestures() {
+  const sheet = document.querySelector('.sheet');
+  if (!sheet || !sheet.addEventListener) return;
+  const hold = () => { if (map && map.dragging && map.dragging.disable) map.dragging.disable(); };
+  const release = () => { if (map && map.dragging && map.dragging.enable) map.dragging.enable(); };
+  sheet.addEventListener('touchstart', hold, { passive: true });
+  sheet.addEventListener('touchend', release, { passive: true });
+  sheet.addEventListener('touchcancel', release, { passive: true });
 }
 
 function message(kind, text) {
@@ -753,7 +794,9 @@ function handleResult(result, target, client, ground = null) {
   renderCards();
   selectRoute(0, 0, { fit: true });
   // The routes you asked for, in front of you, without having to find a strip
-  // of screen that scrolls.
+  // of screen that scrolls. A search is a request to choose, so it also brings
+  // the sheet back up if it was standing down.
+  setPeek(false);
   bringIntoView('resultsPanel');
 }
 
@@ -877,9 +920,11 @@ function card(candidate, group, dom, gi, ri) {
 /* Redraws every panel from whatever is in `groups`, including when that is
  * nothing, which is what switching modes needs. */
 function markHasResults() {
-  if (document.body && document.body.classList) {
-    document.body.classList.toggle('has-results', groups.length > 0);
-  }
+  if (!document.body || !document.body.classList) return;
+  document.body.classList.toggle('has-results', groups.length > 0);
+  // Peek shows one chosen route. With no routes there is nothing to show, and
+  // the way back out is hidden along with the rest of the sheet.
+  if (!groups.length && peeking()) setPeek(false);
 }
 
 function refreshDisplay({ fit = false } = {}) {
@@ -1040,7 +1085,13 @@ function svgEl(name, attrs) {
 }
 
 const PAD = { left: 40, right: 30, top: 10, bottom: 46 };
-const CHART_H = 200;
+/* Two heights, drawn rather than scaled. Squashing the finished chart with CSS
+ * would either shrink the whole thing into the middle of the strip or crop it,
+ * and neither reads; redrawing at the shorter height keeps the labels, the
+ * gradient ribbon and the line all in proportion. */
+const CHART_H_FULL = 200;
+const CHART_H_PEEK = 96;
+const chartH = () => (peeking() ? CHART_H_PEEK : CHART_H_FULL);
 const RIBBON = 9;
 let chartWidth = 560;
 let scaleX = () => 0;
@@ -1052,11 +1103,12 @@ function drawChart() {
   if (!points.length) { chart.textContent = ''; return; }
 
   chartWidth = Math.max(280, chart.clientWidth || chart.parentNode.clientWidth || 560);
-  chart.setAttribute('viewBox', `0 0 ${chartWidth} ${CHART_H}`);
-  chart.setAttribute('height', CHART_H);
+  const height = chartH();
+  chart.setAttribute('viewBox', `0 0 ${chartWidth} ${height}`);
+  chart.setAttribute('height', height);
   chart.textContent = '';
 
-  const plotBottom = CHART_H - PAD.bottom;
+  const plotBottom = height - PAD.bottom;
   const endKm = points[points.length - 1].km;
   scaleX = (km) => PAD.left + (km / domain.km) * (chartWidth - PAD.left - PAD.right);
   scaleY = (m) => plotBottom - ((m - domain.lo) / (domain.hi - domain.lo)) * (plotBottom - PAD.top);
@@ -1720,6 +1772,10 @@ function setPlotMode(on) {
   // Any in-flight edit belongs to the mode being left.
   if (rerouteTimer) { clearTimeout(rerouteTimer); rerouteTimer = null; }
 
+  // Peek belongs to whichever mode put it there, and the plot bar it hides is
+  // the whole point of the mode being arrived at.
+  setPeek(false);
+
   // Bring the restored routes back into view: they may be somewhere else entirely.
   positionMapControls();
   refreshDisplay({ fit: groups.length > 0 });
@@ -2025,6 +2081,7 @@ function wireEvents() {
   $('routeName').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') saveCurrentRoute();
   });
+  $('sheetToggle').addEventListener('click', () => setPeek(!peeking()));
   $('mapSizeBtn').addEventListener('click', function toggleMapSize() {
     const panel = document.querySelector('.map-panel');
     const compact = !panel.classList.contains('compact');
