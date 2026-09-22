@@ -159,7 +159,6 @@ function boot() {
   }
 
   watchTheme();
-  watchSheetPosition();
   positionMapControls();
   whenIdle(() => { store.load(); refreshTerrainCount(); });
   setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
@@ -379,45 +378,24 @@ function positionMapControls() {
   }
 }
 
-/* Brings a panel to the top of the screen. More than half the screen is the
- * map, which ignores pointers so the map itself can be panned, so a search
- * that leaves its results below the fold asks you to find the one strip of
- * sheet that will scroll. Rather than rely on that, put them in front of you. */
+/* The sheet is the only thing on the page that scrolls, so everything that
+ * moves the view moves the sheet. */
+function sheetScroller() { return document.querySelector('.sheet'); }
+
+/* Brings a panel to the top of the sheet. The sheet is about two thirds of the
+ * screen, so a search whose results sit below its fold leaves you scrolling to
+ * find what you asked for. Put them in front of you instead. */
 function bringIntoView(id) {
-  const scroller = document.querySelector('.scroll');
+  const scroller = sheetScroller();
   const target = $(id);
-  if (!scroller || !target || !target.getBoundingClientRect) return;
-  scrollSheet(Math.max(0, scroller.scrollTop + target.getBoundingClientRect().top - 12));
+  if (!scroller || !target || !target.getBoundingClientRect || !scroller.getBoundingClientRect) return;
+  const offset = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+  scrollSheet(Math.max(0, scroller.scrollTop + offset - 12));
 }
 
 function scrollSheet(top) {
-  const scroller = document.querySelector('.scroll');
+  const scroller = sheetScroller();
   if (scroller && scroller.scrollTo) scroller.scrollTo({ top, behavior: 'smooth' });
-}
-
-/* The controls that float over the map are only useful while the map is what
- * you are looking at. Once the sheet is scrolled up over them they are just
- * something sitting on top of its buttons, so they get out of the way. */
-function watchSheetPosition() {
-  const scroller = document.querySelector('.scroll');
-  if (!scroller || !scroller.addEventListener) return;
-  let queued = false;
-  const update = () => {
-    queued = false;
-    const sheet = document.querySelector('.sheet');
-    if (!sheet || !sheet.getBoundingClientRect) return;
-    const covered = sheet.getBoundingClientRect().top < 300;
-    if (document.body && document.body.classList) {
-      document.body.classList.toggle('sheet-up', covered);
-    }
-  };
-  scroller.addEventListener('scroll', () => {
-    if (queued) return;
-    queued = true;
-    if (globalThis.requestAnimationFrame) globalThis.requestAnimationFrame(update);
-    else update();
-  });
-  update();
 }
 
 function message(kind, text) {
