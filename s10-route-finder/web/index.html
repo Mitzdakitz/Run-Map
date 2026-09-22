@@ -60,6 +60,13 @@
        the map graphics follow the theme rather than being fixed in script. */
     --route:#4a5636; --route-dim:#b09c86; --route-end:#8f4a22;
 
+    /* Where the controls that float over the map start. app.js measures the
+       real bottom of the header and writes this; the value here is only the
+       fallback for the moment before that happens. Hard coding it meant the
+       hills button sat on the Search button whenever the header was taller
+       than the number assumed. */
+    --hud-top: calc(env(safe-area-inset-top, 0px) + 162px);
+
     --r-sm:12px; --r:18px; --r-lg:24px; --r-sheet:30px;
     --map-wash:sepia(.34) saturate(.78) hue-rotate(-8deg) brightness(1.06) contrast(.94);
     --map-under:#e6d9c3;
@@ -146,7 +153,12 @@
     /* minmax(0,1fr) rather than an implicit auto column. An auto track cannot
        shrink below its content's minimum, so one row that will not wrap makes
        every row wider than the screen and the whole page scrolls sideways. */
-    display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 10px;
+    /* max-content rather than auto rows. With a definite height the grid hands
+       the last row only the space left over, so a tall sheet was drawn 522px
+       high around 800px of content and the overflow painted straight onto the
+       map with no panel behind it. */
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content; align-content: start; gap: 10px;
     padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px));
     pointer-events: none;          /* the map shows through the gaps */
   }
@@ -174,7 +186,7 @@
   .mode.on { background: var(--accent-2); color: #fff; box-shadow: 0 2px 8px rgba(80,95,55,.35); }
   :root[data-theme="dark"] .mode.on, :root:not([data-theme="light"]) .mode.on { color: #241d17; }
   .icon-btn {
-    flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+    flex: none; width: 44px; height: 44px; display: grid; place-items: center;
     border-radius: 999px; border: 1px solid var(--glass-line); background: var(--sunken);
     color: var(--ink); cursor: pointer;
   }
@@ -184,7 +196,7 @@
   .query { display: flex; align-items: center; gap: 8px; padding: 7px 7px 7px 6px; border-radius: 999px; }
   .terms-summary {
     flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
-    font: 600 15px "Figtree", sans-serif; min-height: 40px; padding: 0 14px; border-radius: 999px;
+    font: 600 15px "Figtree", sans-serif; min-height: 44px; padding: 0 14px; border-radius: 999px;
     background: transparent; border: 0; cursor: pointer; color: var(--ink);
     overflow: hidden; white-space: nowrap; text-align: left;
     /* A button centres its contents, so an overflowing line gets clipped at
@@ -198,6 +210,10 @@
   .terms-summary .sep { color: var(--ink); opacity: .3; font-weight: 400; }
   .terms-summary #sumClimb { color: var(--accent-deep); }
   .terms-summary .cue { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--faint); padding-left: 8px; }
+  /* On a phone the cue costs about forty pixels and the whole pill is already
+     a button, so the start name gets that space instead of being squeezed to
+     a single letter. */
+  @media (max-width: 460px) { .terms-summary .cue { display: none; } }
   .terms-summary:hover { background: var(--sunken); }
 
   /* ---------- controls ---------- */
@@ -219,7 +235,7 @@
     color: var(--ink); background: var(--sunken); border: 1px solid var(--line); border-radius: 999px;
   }
   select { padding-right: 8px; }
-  input::placeholder { color: var(--faint); }
+  input::placeholder { color: var(--faint); font-size: 13.5px; }
   input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .field-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -238,7 +254,7 @@
   /* ---------- floating map controls ---------- */
   .map-tools {
     position: fixed; right: 10px; z-index: 20;
-    top: calc(env(safe-area-inset-top, 0px) + 138px);
+    top: var(--hud-top);
     display: grid; gap: 8px; justify-items: end;
   }
   .map-tools .chip {
@@ -369,14 +385,14 @@
   .leaflet-container { background: var(--map-under); }
   .leaflet-control-attribution { font-family: "Figtree", sans-serif; background: var(--glass) !important; border-radius: 999px 0 0 0; }
   /* Leaflet's own controls clear the floating glass */
-  .leaflet-top.leaflet-left { top: calc(env(safe-area-inset-top, 0px) + 138px); left: 2px; }
+  .leaflet-top.leaflet-left { top: var(--hud-top); left: 2px; }
   .leaflet-bar { border: 1px solid var(--glass-line) !important; border-radius: var(--r) !important; overflow: hidden; box-shadow: var(--shadow); }
   .leaflet-bar a { background: var(--glass) !important; color: var(--ink) !important; border-bottom-color: var(--line) !important; }
   .leaflet-bar a:hover { background: var(--accent-tint) !important; }
   .arrow-icon, .sf-icon, .turn-icon { background: none; border: 0; }
   .route-hit { pointer-events: stroke; }
 
-  .map-legend { position: fixed; left: 10px; z-index: 20; top: calc(env(safe-area-inset-top, 0px) + 218px); display: flex; gap: 6px; flex-wrap: wrap; }
+  .map-legend { position: fixed; left: 10px; z-index: 20; top: calc(var(--hud-top) + 80px); display: flex; gap: 6px; flex-wrap: wrap; }
   .pill {
     font-size: 12px; font-weight: 600; padding: 6px 11px; border-radius: 999px;
     background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -386,7 +402,7 @@
 
   .map-lock {
     position: fixed; right: 10px; z-index: 22;
-    top: calc(env(safe-area-inset-top, 0px) + 138px);
+    top: var(--hud-top);
     display: flex; align-items: center; gap: 7px;
     padding: 0 15px; height: 46px; border-radius: var(--r); cursor: pointer;
     font: 700 14px "Figtree", sans-serif; line-height: 1;
@@ -395,8 +411,14 @@
     border: 1px solid var(--glass-line); box-shadow: var(--shadow);
   }
   .map-lock[aria-pressed="true"] { color: var(--muted); }
+  /* Scrolled up over the map, the sheet owns the screen and these would
+     otherwise float on top of its buttons. */
+  body.sheet-up .map-tools, body.sheet-up .map-lock, body.sheet-up .map-legend {
+    opacity: 0; pointer-events: none;
+  }
+  .map-tools, .map-lock, .map-legend { transition: opacity 140ms ease; }
   /* in plot mode the padlock takes the top slot and the tools drop below it */
-  body:has(#plotLock:not([hidden])) .map-tools { top: calc(env(safe-area-inset-top, 0px) + 192px); }
+  body:has(#plotLock:not([hidden])) .map-tools { top: calc(var(--hud-top) + 54px); }
   /* while the search form is open it owns the top of the screen */
   body:has(#searchPanel:not([hidden])) .map-tools,
   body:has(#searchPanel:not([hidden])) .map-lock,
@@ -454,7 +476,10 @@
   #messages:empty { display: none; }
 
   /* ---------- settings, folded away ---------- */
-  .settings { border-radius: var(--r-lg); background: transparent; border: 1px solid var(--line-soft); padding: 0; }
+  .settings {
+    border-radius: var(--r-lg); padding: 0;
+    background: var(--glass-tile); border: 1px solid var(--glass-line);
+  }
   .settings > summary {
     list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
     gap: 10px; padding: 14px 16px; min-height: 44px;
@@ -578,10 +603,10 @@
       </label>
     </div>
     <div class="field">
-      <input type="text" id="climbExact" inputmode="numeric" placeholder="Or exact metres of ascent" aria-label="Exact metres of ascent">
+      <input type="text" id="climbExact" inputmode="numeric" placeholder="Exact metres of climb" aria-label="Exact metres of ascent">
     </div>
     <div class="field">
-      <input type="search" id="placeSearch" placeholder="Start: search a place or postcode"
+      <input type="search" id="placeSearch" placeholder="Search a place or postcode"
              autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search for a start place">
       <button type="button" class="primary" id="locateBtn" title="Use my current location">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" aria-hidden="true">
@@ -690,7 +715,7 @@
         </div>
         <div class="field">
           <input type="text" id="routeName" maxlength="80" autocomplete="off"
-                 placeholder="Name the route on screen" aria-label="Name for the route being saved">
+                 placeholder="Name this route" aria-label="Name for the route being saved">
           <button type="button" class="primary" id="saveRouteBtn">Save</button>
         </div>
         <div class="saved-list" id="savedList"></div>

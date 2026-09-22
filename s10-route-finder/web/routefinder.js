@@ -106,17 +106,22 @@ const TERRAIN_KEY = 's10.terrain.v1';
 const TERRAIN_VERSION = 2;
 
 export class TerrainStore {
-  constructor({ storage = null, gridM = CONFIG.TERRAIN_GRID_M } = {}) {
+  constructor({ storage = null, gridM = CONFIG.TERRAIN_GRID_M, deferLoad = false } = {}) {
     this.storage = storage;
     this.gridM = gridM;
     this.cells = new Map();      // "row,col" -> elevation
     this.decoded = [];           // [lat, lon, elevation], rebuilt lazily
     this.dirty = false;
     this.capped = false;
-    this.load();
+    this.loaded = false;
+    if (!deferLoad) this.load();
   }
 
+  /* Merges rather than replaces, because the load can now happen after the
+   * first frame and cells may have arrived in the meantime. Anything already
+   * held is newer than what was on disk, so it wins. */
   load() {
+    this.loaded = true;
     if (!this.storage) return;
     let raw = null;
     try { raw = this.storage.getItem(TERRAIN_KEY); } catch { return; }
@@ -126,7 +131,12 @@ export class TerrainStore {
       // Old keys mean something else: the grid changed, or the keys predate the
       // latitude-aware columns and would decode to the wrong place.
       if (parsed.gridM !== this.gridM || parsed.version !== TERRAIN_VERSION) return;
-      this.cells = new Map(Object.entries(parsed.cells || {}));
+      const stored = Object.entries(parsed.cells || {});
+      if (this.cells.size === 0) this.cells = new Map(stored);
+      else for (const [key, ele] of stored) if (!this.cells.has(key)) this.cells.set(key, ele);
+      while (this.cells.size > CONFIG.MAX_TERRAIN_POINTS) {
+        this.cells.delete(this.cells.keys().next().value);
+      }
       this.decoded = [];
     } catch { /* a corrupt store is simply an empty one */ }
   }
@@ -400,7 +410,13 @@ export class OrsClient {
     }
 
     const data = await response.json();
+    /* One response is a couple of thousand coordinate triples. The search
+     * client is thrown away after each search, but the plotting one lives for
+     * the session, so without a bound this grows all evening. */
     this.cache.set(key, data);
+    while (this.cache.size > CONFIG.ROUTE_CACHE_LIMIT) {
+      this.cache.delete(this.cache.keys().next().value);
+    }
     return data;
   }
 }
