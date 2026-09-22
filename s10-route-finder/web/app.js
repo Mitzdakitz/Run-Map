@@ -379,6 +379,17 @@ function positionMapControls() {
   }
 }
 
+/* Brings a panel to the top of the screen. More than half the screen is the
+ * map, which ignores pointers so the map itself can be panned, so a search
+ * that leaves its results below the fold asks you to find the one strip of
+ * sheet that will scroll. Rather than rely on that, put them in front of you. */
+function bringIntoView(id) {
+  const scroller = document.querySelector('.scroll');
+  const target = $(id);
+  if (!scroller || !target || !target.getBoundingClientRect) return;
+  scrollSheet(Math.max(0, scroller.scrollTop + target.getBoundingClientRect().top - 12));
+}
+
 function scrollSheet(top) {
   const scroller = document.querySelector('.scroll');
   if (scroller && scroller.scrollTo) scroller.scrollTo({ top, behavior: 'smooth' });
@@ -763,6 +774,9 @@ function handleResult(result, target, client, ground = null) {
   $('reverseBtn').setAttribute('aria-pressed', 'false');
   renderCards();
   selectRoute(0, 0, { fit: true });
+  // The routes you asked for, in front of you, without having to find a strip
+  // of screen that scrolls.
+  bringIntoView('resultsPanel');
 }
 
 // --- shared scale ----------------------------------------------------------
@@ -884,7 +898,14 @@ function card(candidate, group, dom, gi, ri) {
 // --- selection -------------------------------------------------------------
 /* Redraws every panel from whatever is in `groups`, including when that is
  * nothing, which is what switching modes needs. */
+function markHasResults() {
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle('has-results', groups.length > 0);
+  }
+}
+
 function refreshDisplay({ fit = false } = {}) {
+  markHasResults();
   if (!groups.length) {
     selected = { group: 0, route: 0 };
     activeProfile = [];
@@ -912,6 +933,7 @@ function selectRoute(gi, ri, { fit = false } = {}) {
   $('dirPill').textContent = 'As routed';
   domain = domainFor(groups[gi]);
   activeProfile = groups[gi].profiles[ri];
+  markHasResults();
   renderCards();
   drawRoutes(fit);
   drawPlot();
