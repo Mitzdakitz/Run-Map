@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-23.3';
+export const APP_VERSION = '2026-09-23.4';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -67,6 +67,7 @@ export const CONFIG = {
    * and profiles, and every one of its routes gets a card and a sparkline
    * rebuilt whenever the selection changes. */
   GROUPS_KEPT: 6,
+  ROUTE_CACHE_LIMIT: 12,         // recent route responses kept to avoid re-asking
   PLOT_BUDGET: 60,               // routing requests one plotting session may spend
   /* Releasing a pan drops a point straight away. The points appear at once, but
    * the routing request behind them waits a moment, so panning out several in
