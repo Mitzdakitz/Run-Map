@@ -60,6 +60,13 @@
        the map graphics follow the theme rather than being fixed in script. */
     --route:#4a5636; --route-dim:#b09c86; --route-end:#8f4a22;
 
+    /* Where the controls that float over the map start. app.js measures the
+       real bottom of the header and writes this; the value here is only the
+       fallback for the moment before that happens. Hard coding it meant the
+       hills button sat on the Search button whenever the header was taller
+       than the number assumed. */
+    --hud-top: calc(env(safe-area-inset-top, 0px) + 162px);
+
     --r-sm:12px; --r:18px; --r-lg:24px; --r-sheet:30px;
     --map-wash:sepia(.34) saturate(.78) hue-rotate(-8deg) brightness(1.06) contrast(.94);
     --map-under:#e6d9c3;
@@ -247,7 +254,7 @@
   /* ---------- floating map controls ---------- */
   .map-tools {
     position: fixed; right: 10px; z-index: 20;
-    top: calc(env(safe-area-inset-top, 0px) + 138px);
+    top: var(--hud-top);
     display: grid; gap: 8px; justify-items: end;
   }
   .map-tools .chip {
@@ -378,14 +385,14 @@
   .leaflet-container { background: var(--map-under); }
   .leaflet-control-attribution { font-family: "Figtree", sans-serif; background: var(--glass) !important; border-radius: 999px 0 0 0; }
   /* Leaflet's own controls clear the floating glass */
-  .leaflet-top.leaflet-left { top: calc(env(safe-area-inset-top, 0px) + 138px); left: 2px; }
+  .leaflet-top.leaflet-left { top: var(--hud-top); left: 2px; }
   .leaflet-bar { border: 1px solid var(--glass-line) !important; border-radius: var(--r) !important; overflow: hidden; box-shadow: var(--shadow); }
   .leaflet-bar a { background: var(--glass) !important; color: var(--ink) !important; border-bottom-color: var(--line) !important; }
   .leaflet-bar a:hover { background: var(--accent-tint) !important; }
   .arrow-icon, .sf-icon, .turn-icon { background: none; border: 0; }
   .route-hit { pointer-events: stroke; }
 
-  .map-legend { position: fixed; left: 10px; z-index: 20; top: calc(env(safe-area-inset-top, 0px) + 218px); display: flex; gap: 6px; flex-wrap: wrap; }
+  .map-legend { position: fixed; left: 10px; z-index: 20; top: calc(var(--hud-top) + 80px); display: flex; gap: 6px; flex-wrap: wrap; }
   .pill {
     font-size: 12px; font-weight: 600; padding: 6px 11px; border-radius: 999px;
     background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -395,7 +402,7 @@
 
   .map-lock {
     position: fixed; right: 10px; z-index: 22;
-    top: calc(env(safe-area-inset-top, 0px) + 138px);
+    top: var(--hud-top);
     display: flex; align-items: center; gap: 7px;
     padding: 0 15px; height: 46px; border-radius: var(--r); cursor: pointer;
     font: 700 14px "Figtree", sans-serif; line-height: 1;
@@ -411,7 +418,7 @@
   }
   .map-tools, .map-lock, .map-legend { transition: opacity 140ms ease; }
   /* in plot mode the padlock takes the top slot and the tools drop below it */
-  body:has(#plotLock:not([hidden])) .map-tools { top: calc(env(safe-area-inset-top, 0px) + 192px); }
+  body:has(#plotLock:not([hidden])) .map-tools { top: calc(var(--hud-top) + 54px); }
   /* while the search form is open it owns the top of the screen */
   body:has(#searchPanel:not([hidden])) .map-tools,
   body:has(#searchPanel:not([hidden])) .map-lock,

@@ -160,6 +160,7 @@ function boot() {
 
   watchTheme();
   watchSheetPosition();
+  positionMapControls();
   whenIdle(() => { store.load(); refreshTerrainCount(); });
   setStart(start.lat, start.lon, read(STORAGE.startName, 'Default start'), { silent: true });
 
@@ -179,6 +180,7 @@ function boot() {
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
+      positionMapControls();
       if (map) map.invalidateSize();
       if (activeProfile.length) drawChart();
     }, 180);
@@ -361,6 +363,20 @@ function setToolLabel(button, on, offText, onText) {
   const label = button.querySelector ? button.querySelector('.label') : null;
   if (label) label.textContent = text;
   else button.textContent = text;
+}
+
+/* The controls that float over the map have to start below the header, and
+ * the header's height is not something to guess at: it changes with the mode,
+ * with the safe area inset, and with the text size someone has chosen. */
+function positionMapControls() {
+  const header = $('findQuery').hidden ? document.querySelector('.topbar') : $('findQuery');
+  if (!header || !header.getBoundingClientRect) return;
+  const bottom = header.getBoundingClientRect().bottom;
+  if (!bottom) return;
+  const root = document.documentElement;
+  if (root && root.style && root.style.setProperty) {
+    root.style.setProperty('--hud-top', `${Math.round(bottom) + 10}px`);
+  }
 }
 
 function scrollSheet(top) {
@@ -1705,6 +1721,7 @@ function setPlotMode(on) {
   if (rerouteTimer) { clearTimeout(rerouteTimer); rerouteTimer = null; }
 
   // Bring the restored routes back into view: they may be somewhere else entirely.
+  positionMapControls();
   refreshDisplay({ fit: groups.length > 0 });
   renderPlotStats();
 }
