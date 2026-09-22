@@ -165,6 +165,11 @@
   .scroll > * { pointer-events: auto; min-width: 0; }
   /* the window onto the map: transparent, and taps fall through to Leaflet */
   .void { pointer-events: none; height: 34vh; min-height: 150px; }
+  /* The void is the window onto the map, and it ignores pointers so the map
+     underneath can be panned. That makes it dead to scrolling, so while it is
+     a third of the screen and the sheet is another third, most of the phone
+     will not scroll. Once there are routes to read, the sheet gets the room. */
+  body.has-results .void { height: 20vh; min-height: 110px; }
   .map-layer.compact ~ .scroll .void { height: 14vh; min-height: 80px; }
 
   .glass {
@@ -651,6 +656,15 @@
 
     <div class="bento">
 
+      <section class="tile" id="resultsPanel">
+        <div class="head">
+          <h2 id="resultsHeading">Results</h2>
+        </div>
+        <div class="cards" id="cards"></div>
+        <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
+        <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
+      </section>
+
       <section class="tile span-all" id="detailPanel" hidden>
         <div class="head">
           <h2 id="detailTitle">Selected route</h2>
@@ -697,15 +711,6 @@
           <div class="detail-row"><span class="k">Found by</span><span id="dStrategy">&mdash;</span></div>
         </div>
         <p class="hint" style="margin:0" id="chartNote"></p>
-      </section>
-
-      <section class="tile" id="resultsPanel">
-        <div class="head">
-          <h2 id="resultsHeading">Results</h2>
-        </div>
-        <div class="cards" id="cards"></div>
-        <div class="empty" id="cardsEmpty">No searches yet. Set your targets and press Search.</div>
-        <p class="hint" style="margin:0" id="cardsNote" hidden>Faint lines are the routes you have not picked. Tap either the card or the line.</p>
       </section>
 
       <section class="tile">
