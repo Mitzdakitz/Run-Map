@@ -146,23 +146,28 @@
     position: fixed; inset: 0; z-index: 0;
     background: var(--map-under);
   }
+  /* This layer lays the screen out; it does not scroll. It cannot, because it
+     ignores pointers so the map below can be reached through the void, and a
+     scroll container that ignores pointers is not reliably scrollable by touch
+     in WebKit: a swipe over the sheet moved nothing on the phone even though
+     the same page scrolled by script and scrolled by touch in Chromium. The
+     sheet owns its own scrolling instead, as an ordinary element that takes
+     pointers, which is the arrangement every phone app uses: a header that
+     stays put and one panel that moves. */
   .scroll {
     position: fixed; inset: 0; z-index: 10;
-    overflow-y: auto; -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    /* minmax(0,1fr) rather than an implicit auto column. An auto track cannot
-       shrink below its content's minimum, so one row that will not wrap makes
-       every row wider than the screen and the whole page scrolls sideways. */
-    /* max-content rather than auto rows. With a definite height the grid hands
-       the last row only the space left over, so a tall sheet was drawn 522px
-       high around 800px of content and the overflow painted straight onto the
-       map with no panel behind it. */
-    display: grid; grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: max-content; align-content: start; gap: 10px;
+    overflow: hidden;
+    /* Column, so the sheet can be handed whatever height the rows above leave
+       it. A hidden child simply drops out, which explicit grid rows would not
+       allow for: the search panel comes and goes. */
+    display: flex; flex-direction: column; gap: 10px;
     padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px));
     pointer-events: none;          /* the map shows through the gaps */
   }
-  .scroll > * { pointer-events: auto; min-width: 0; }
+  /* min-width: 0 for the same reason the column used to be minmax(0,1fr): a
+     flex item will not shrink below its content's minimum without it, so one
+     line that will not wrap pushes the whole screen sideways. */
+  .scroll > * { pointer-events: auto; min-width: 0; flex: 0 0 auto; }
   /* the window onto the map: transparent, and taps fall through to Leaflet */
   .void { pointer-events: none; height: 34vh; min-height: 150px; }
   /* The void is the window onto the map, and it ignores pointers so the map
@@ -278,7 +283,13 @@
     box-shadow: var(--shadow-lift);
     padding: 10px 12px 16px;
     display: grid; gap: 10px;
-    min-height: 56vh;
+    /* The scroller. It takes the height the header and the void leave it and
+       moves its own contents, so no ancestor has to scroll. min-height: 0 is
+       what lets it be shorter than its contents; without it a flex item is
+       floored at its content height and there is nothing left to scroll. */
+    flex: 1 1 auto; min-height: 0;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
   .grabber { width: 44px; height: 5px; border-radius: 999px; background: var(--ink); opacity: .18; margin: 2px auto 6px; }
 
@@ -418,9 +429,6 @@
   .map-lock[aria-pressed="true"] { color: var(--muted); }
   /* Scrolled up over the map, the sheet owns the screen and these would
      otherwise float on top of its buttons. */
-  body.sheet-up .map-tools, body.sheet-up .map-lock, body.sheet-up .map-legend {
-    opacity: 0; pointer-events: none;
-  }
   .map-tools, .map-lock, .map-legend { transition: opacity 140ms ease; }
   /* in plot mode the padlock takes the top slot and the tools drop below it */
   body:has(#plotLock:not([hidden])) .map-tools { top: calc(var(--hud-top) + 54px); }

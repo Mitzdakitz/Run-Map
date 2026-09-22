@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-23.6';
+export const APP_VERSION = '2026-09-23.7';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
