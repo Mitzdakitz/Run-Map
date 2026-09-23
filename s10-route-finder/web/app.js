@@ -176,7 +176,7 @@ function boot() {
   let lastWidth = globalThis.innerWidth || 0;
   let lastHeight = globalThis.innerHeight || 0;
   let widthMoved = false;
-  window.addEventListener('resize', () => {
+  const viewportMoved = () => {
     const width = globalThis.innerWidth;
     const height = globalThis.innerHeight;
     if (width === lastWidth && height === lastHeight) return;
@@ -196,7 +196,15 @@ function boot() {
       if (widthMoved && activeProfile.length) drawChart();
       widthMoved = false;
     }, 180);
-  });
+  };
+  window.addEventListener('resize', viewportMoved);
+  /* The address bar sliding away is a change to the visual viewport, and a
+   * phone browser does not reliably raise a window resize for it. This is the
+   * event that is actually about the part of the page you can see. */
+  const seen = globalThis.visualViewport;
+  if (seen && seen.addEventListener) {
+    seen.addEventListener('resize', viewportMoved);
+  }
 }
 
 /* Map overlays keep literal colours rather than theme tokens: OpenStreetMap
@@ -404,6 +412,16 @@ function positionMapControls() {
 /* The sheet is the only thing on the page that scrolls, so everything that
  * moves the view moves the sheet. */
 function sheetScroller() { return document.querySelector('.sheet'); }
+
+/* The map container reaches 80px below its layer so no viewport change can
+ * uncover unpainted tiles. Leaflet centres what it fits in the whole container,
+ * overhang included, so without this every route would sit 40px lower than it
+ * used to. */
+const MAP_OVERHANG = 80;
+const fitPadding = () => ({
+  paddingTopLeft: [28, 28],
+  paddingBottomRight: [28, 28 + MAP_OVERHANG],
+});
 
 /* Brings a panel to the top of the sheet. The sheet is about two thirds of the
  * screen, so a search whose results sit below its fold leaves you scrolling to
@@ -1051,7 +1069,7 @@ function drawRoutes(fit) {
   drawTurnaround();
   if (fit) {
     const chosen = routeLayer.lines[selected.route];
-    if (chosen) map.fitBounds(chosen.getBounds(), { padding: [28, 28] });
+    if (chosen) map.fitBounds(chosen.getBounds(), fitPadding());
   }
 }
 
@@ -1986,7 +2004,7 @@ function openSaved(id) {
     message('info', `"${saved.name}" opened.`);
   }
 
-  if (map && plot.line) map.fitBounds(plot.line.getBounds(), { padding: [28, 28] });
+  if (map && plot.line) map.fitBounds(plot.line.getBounds(), fitPadding());
 }
 
 function deleteSaved(id, name) {

@@ -315,12 +315,6 @@
        computes overflow-x to auto as well, which turned that widening into a
        sideways scroll rather than something that simply could not happen. */
     overflow-x: hidden;
-    /* A scroller slices its contents flat at its own edge, so a chart caught
-       halfway ended in a hard horizontal line with nothing to say there was
-       more below. The last few pixels dissolve instead. Scrolled to the end
-       there is only the sheet's own padding down there, so nothing fades. */
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
   }
   .grabber { display: block; width: 44px; height: 5px; border-radius: 999px; background: var(--ink); opacity: .18; margin: 0 auto; }
   /* The pill was decoration. It is the way back to the map now, so it is a
@@ -487,7 +481,13 @@
   .plot-actions #plotDone:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
 
   .map-shell { position: absolute; inset: 0; }
-  #map { position: absolute; inset: 0; height: 100%; z-index: 0; background: var(--map-under); }
+  /* The container reaches past the bottom of its layer. Whatever the browser
+     does with viewport units and whether or not it tells us the viewport
+     changed, Leaflet has already fetched tiles for that strip, so nothing can
+     uncover an unpainted band. The layer clips it, so none of it is wasted on
+     screen; it costs one extra row of tiles. */
+  #map { position: absolute; top: 0; left: 0; right: 0; bottom: -80px; z-index: 0; background: var(--map-under); }
+  .map-layer { overflow: hidden; }
   /* the tiles are washed so the glass sits on warm ground, not on OSM blue-grey.
      Only the basemap: the hills overlay shares this pane, and washing that too
      would turn an orange elevation ramp blue in the dark theme. */
