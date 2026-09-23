@@ -126,7 +126,10 @@
   [hidden] { display: none !important; }
   html, body { margin: 0; height: 100%; }
   body {
-    background: var(--ground); color: var(--ink);
+    /* The map's own colour, not the page's. Anything that briefly shows from
+       behind the layers while the toolbars move then matches the map rather
+       than flashing a pale band across the bottom of the screen. */
+    background: var(--map-under); color: var(--ink);
     font: 400 15px/1.5 "Figtree", ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;              /* the scroll layer owns scrolling */
@@ -143,7 +146,14 @@
 
   /* ---------- the two layers ---------- */
   .map-layer {
-    position: fixed; inset: 0; z-index: 0;
+    /* 100lvh, the large viewport: the height with the browser's toolbars out
+       of the way. Pinned to all four sides instead, the layer is sized while
+       the toolbar is showing, and when it slides away the strip it uncovers
+       belongs to no layer at all and is painted with the page background. The
+       scroll layer above takes 100dvh, which follows the toolbar, so content
+       stays reachable while the map underneath always reaches the bottom. */
+    position: fixed; top: 0; left: 0; right: 0; z-index: 0;
+    height: 100vh; height: 100lvh;
     background: var(--map-under);
   }
   /* This layer lays the screen out; it does not scroll. It cannot, because it
@@ -155,7 +165,13 @@
      pointers, which is the arrangement every phone app uses: a header that
      stays put and one panel that moves. */
   .scroll {
-    position: fixed; inset: 0; z-index: 10;
+    /* 100dvh, not inset: 0. A fixed layer pinned to all four sides is sized
+       against the large viewport, so on a phone its last few tens of pixels
+       sit behind Safari's toolbar and whatever is down there is cut off. The
+       dynamic viewport height is the part actually on screen. The map layer
+       stays full bleed behind it, which is what the glass samples. */
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    height: 100vh; height: 100dvh;
     overflow: hidden;
     /* Column, so the sheet can be handed whatever height the rows above leave
        it. A hidden child simply drops out, which explicit grid rows would not
@@ -299,6 +315,12 @@
        computes overflow-x to auto as well, which turned that widening into a
        sideways scroll rather than something that simply could not happen. */
     overflow-x: hidden;
+    /* A scroller slices its contents flat at its own edge, so a chart caught
+       halfway ended in a hard horizontal line with nothing to say there was
+       more below. The last few pixels dissolve instead. Scrolled to the end
+       there is only the sheet's own padding down there, so nothing fades. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent);
   }
   .grabber { display: block; width: 44px; height: 5px; border-radius: 999px; background: var(--ink); opacity: .18; margin: 0 auto; }
   /* The pill was decoration. It is the way back to the map now, so it is a
@@ -338,7 +360,26 @@
   body.sheet-peek #detailPanel .detail,
   body.sheet-peek #detailPanel #chartNote { display: none; }
   /* The chart is redrawn at the shorter height rather than scaled to it, so
-     there is no height here: the attribute the renderer writes is the height. */
+     there is no height here: the attribute the renderer writes is the height.
+     It does get the width back that the tile's padding was taking. */
+  body.sheet-peek #detailPanel { padding: 10px 12px 12px; }
+  body.sheet-peek .chart { width: calc(100% + 24px); margin: 0 -12px; }
+
+  /* One row, small. Stacked at 30px the three metrics were taller than the
+     panel they were meant to replace. The values carry their own units, so
+     the labels can be small and sit beside them rather than under. */
+  /* Wrap rather than nowrap: three metrics and their labels fit on one row on
+     a normal phone, and on a very narrow one this gives a second row instead
+     of slicing the last value in half. */
+  body.sheet-peek .summary { flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+  body.sheet-peek .metric { flex-direction: row; align-items: baseline; gap: 4px; min-width: 0; }
+  body.sheet-peek .metric .v { font-size: 17px; }
+  body.sheet-peek .metric .k { font-size: 9px; margin-top: 0; letter-spacing: .04em; }
+  body.sheet-peek .metric .d,
+  body.sheet-peek #mBadge { display: none; }
+  /* "1:02:18" says it is a time without being told. Its label was 70px of the
+     row, which is the difference between one line and two on a 390px phone. */
+  body.sheet-peek #timeMetric .k { display: none; }
 
   /* every former panel is now a bento tile on the sheet */
   .tile {

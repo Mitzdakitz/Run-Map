@@ -174,15 +174,27 @@ function boot() {
    * and even then not until the resizing stops. */
   let resizeTimer = null;
   let lastWidth = globalThis.innerWidth || 0;
+  let lastHeight = globalThis.innerHeight || 0;
+  let widthMoved = false;
   window.addEventListener('resize', () => {
-    if (globalThis.innerWidth === lastWidth) return;
-    lastWidth = globalThis.innerWidth;
+    const width = globalThis.innerWidth;
+    const height = globalThis.innerHeight;
+    if (width === lastWidth && height === lastHeight) return;
+    if (width !== lastWidth) widthMoved = true;
+    lastWidth = width;
+    lastHeight = height;
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
       positionMapControls();
+      /* Leaflet caches the size of its box. The address bar collapsing changes
+       * the height and not the width, which this used to skip entirely, so the
+       * map kept the height it was built at and the strip that appeared below
+       * it was never painted. A height change is the one that matters here. */
       if (map) map.invalidateSize();
-      if (activeProfile.length) drawChart();
+      // The chart is laid out across the width, so only a width change moves it.
+      if (widthMoved && activeProfile.length) drawChart();
+      widthMoved = false;
     }, 180);
   });
 }
@@ -297,6 +309,7 @@ function initMap() {
       addPlotPoint(e.latlng.lat, e.latlng.lng);
       return;
     }
+    if (startLocked) return;
     setStart(e.latlng.lat, e.latlng.lng, 'Map pin');
   });
 
@@ -369,11 +382,20 @@ function setToolLabel(button, on, offText, onText) {
  * the header's height is not something to guess at: it changes with the mode,
  * with the safe area inset, and with the text size someone has chosen. */
 function positionMapControls() {
+  const root = document.documentElement;
+  /* In peek there is no header at all, so there is nothing to measure and the
+   * controls used to keep the position the header last gave them, stranded
+   * halfway down a map that now starts at the top of the screen. */
+  if (peeking()) {
+    if (root && root.style && root.style.setProperty) {
+      root.style.setProperty('--hud-top', 'calc(env(safe-area-inset-top, 0px) + 20px)');
+    }
+    return;
+  }
   const header = $('findQuery').hidden ? document.querySelector('.topbar') : $('findQuery');
   if (!header || !header.getBoundingClientRect) return;
   const bottom = header.getBoundingClientRect().bottom;
   if (!bottom) return;
-  const root = document.documentElement;
   if (root && root.style && root.style.setProperty) {
     root.style.setProperty('--hud-top', `${Math.round(bottom) + 10}px`);
   }
@@ -414,10 +436,32 @@ function setPeek(on) {
     setToolLabel(button, on, 'Focus map', 'Show details');
   }
   // The strip is shorter than the panel, so the profile is drawn again to fit
-  // rather than scaled into it.
+  // rather than scaled into it, and the controls that float over the map have
+  // a different amount of map to float over.
   drawChart();
+  positionMapControls();
   // The map's box just changed size and Leaflet caches that.
   if (map) setTimeout(() => map.invalidateSize(), 220);
+}
+
+/* Once a search has run, its three routes all start where they start. Moving
+ * the pin cannot move them, so the map went on accepting a drag or a tap that
+ * quietly did nothing. Opening the search panel is the way to say you want a
+ * different start, so that unlocks it again; so does having no results. */
+let startLocked = false;
+function refreshStartLock() {
+  const wanted = groups.length > 0 && $('searchPanel').hidden;
+  startLocked = wanted;
+  if (!startMarker) return;
+  if (startMarker.dragging) {
+    if (wanted) startMarker.dragging.disable();
+    else startMarker.dragging.enable();
+  }
+  if (startMarker.setTooltipContent) {
+    startMarker.setTooltipContent(wanted
+      ? 'Start and finish. Edit your search to move it.'
+      : 'Start and finish. Drag to move it.');
+  }
 }
 
 function peeking() {
@@ -925,6 +969,7 @@ function markHasResults() {
   // Peek shows one chosen route. With no routes there is nothing to show, and
   // the way back out is hidden along with the rest of the sheet.
   if (!groups.length && peeking()) setPeek(false);
+  refreshStartLock();
 }
 
 function refreshDisplay({ fit = false } = {}) {
@@ -1084,7 +1129,13 @@ function svgEl(name, attrs) {
   return node;
 }
 
-const PAD = { left: 40, right: 30, top: 10, bottom: 46 };
+/* Room for the axis labels. The strip is short and has no room to spare, so it
+ * gets its own, tighter set: 70px of the width went to margins that a 96px-tall
+ * chart does not need as much of. Reassigned by drawChart, and read afterwards
+ * by moveCursor, which needs whatever the last draw used. */
+const PAD_FULL = { left: 40, right: 30, top: 10, bottom: 46 };
+const PAD_PEEK = { left: 32, right: 12, top: 6, bottom: 26 };
+let PAD = PAD_FULL;
 /* Two heights, drawn rather than scaled. Squashing the finished chart with CSS
  * would either shrink the whole thing into the middle of the strip or crop it,
  * and neither reads; redrawing at the shorter height keeps the labels, the
@@ -1103,6 +1154,7 @@ function drawChart() {
   if (!points.length) { chart.textContent = ''; return; }
 
   chartWidth = Math.max(280, chart.clientWidth || chart.parentNode.clientWidth || 560);
+  PAD = peeking() ? PAD_PEEK : PAD_FULL;
   const height = chartH();
   chart.setAttribute('viewBox', `0 0 ${chartWidth} ${height}`);
   chart.setAttribute('height', height);
@@ -2011,6 +2063,9 @@ function wireEvents() {
     panel.hidden = !opening;
     this.setAttribute('aria-expanded', String(opening));
     $('editCue').textContent = opening ? 'Close' : 'Edit';
+    // Opening the panel means a new search is being set up, so the start is
+    // movable again; closing it without searching locks it back to the results.
+    refreshStartLock();
   });
 
   ['distance', 'climbPreset', 'climbExact', 'shape'].forEach((id) => {
