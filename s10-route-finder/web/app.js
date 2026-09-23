@@ -174,15 +174,27 @@ function boot() {
    * and even then not until the resizing stops. */
   let resizeTimer = null;
   let lastWidth = globalThis.innerWidth || 0;
+  let lastHeight = globalThis.innerHeight || 0;
+  let widthMoved = false;
   window.addEventListener('resize', () => {
-    if (globalThis.innerWidth === lastWidth) return;
-    lastWidth = globalThis.innerWidth;
+    const width = globalThis.innerWidth;
+    const height = globalThis.innerHeight;
+    if (width === lastWidth && height === lastHeight) return;
+    if (width !== lastWidth) widthMoved = true;
+    lastWidth = width;
+    lastHeight = height;
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
       positionMapControls();
+      /* Leaflet caches the size of its box. The address bar collapsing changes
+       * the height and not the width, which this used to skip entirely, so the
+       * map kept the height it was built at and the strip that appeared below
+       * it was never painted. A height change is the one that matters here. */
       if (map) map.invalidateSize();
-      if (activeProfile.length) drawChart();
+      // The chart is laid out across the width, so only a width change moves it.
+      if (widthMoved && activeProfile.length) drawChart();
+      widthMoved = false;
     }, 180);
   });
 }

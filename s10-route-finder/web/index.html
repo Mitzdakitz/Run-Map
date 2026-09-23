@@ -126,7 +126,10 @@
   [hidden] { display: none !important; }
   html, body { margin: 0; height: 100%; }
   body {
-    background: var(--ground); color: var(--ink);
+    /* The map's own colour, not the page's. Anything that briefly shows from
+       behind the layers while the toolbars move then matches the map rather
+       than flashing a pale band across the bottom of the screen. */
+    background: var(--map-under); color: var(--ink);
     font: 400 15px/1.5 "Figtree", ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     overflow: hidden;              /* the scroll layer owns scrolling */
@@ -143,7 +146,14 @@
 
   /* ---------- the two layers ---------- */
   .map-layer {
-    position: fixed; inset: 0; z-index: 0;
+    /* 100lvh, the large viewport: the height with the browser's toolbars out
+       of the way. Pinned to all four sides instead, the layer is sized while
+       the toolbar is showing, and when it slides away the strip it uncovers
+       belongs to no layer at all and is painted with the page background. The
+       scroll layer above takes 100dvh, which follows the toolbar, so content
+       stays reachable while the map underneath always reaches the bottom. */
+    position: fixed; top: 0; left: 0; right: 0; z-index: 0;
+    height: 100vh; height: 100lvh;
     background: var(--map-under);
   }
   /* This layer lays the screen out; it does not scroll. It cannot, because it
