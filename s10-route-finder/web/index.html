@@ -337,6 +337,22 @@
   body.sheet-peek .topbar,
   body.sheet-peek #findQuery,
   body.sheet-peek #searchPanel { display: none; }
+
+  /* ---------- plotting ----------
+     The header stays where it is and loses the parts that only govern a
+     search. What is left is the place you are looking at and the way into the
+     panel, so you can search a place, use a saved start or set your pace
+     without leaving the route you are drawing. */
+  body.plotting #findTargets,
+  body.plotting #searchBtn,
+  body.plotting #sumDistance,
+  body.plotting #sumClimb,
+  body.plotting #sumShape,
+  body.plotting .terms-summary .sep { display: none; }
+  /* The cue is hidden on a narrow screen because the find header is a tight
+     row of four terms. With the terms gone there is nothing but the place name
+     left, and without the word it reads as a label rather than a way in. */
+  body.plotting .terms-summary .cue { display: inline; }
   /* The compact selector carries four classes and would otherwise outrank this
      one, so a map that had been shrunk stayed shrunk when the sheet stood down. */
   body.sheet-peek .void,
@@ -348,6 +364,20 @@
      tenth of the screen. Anything added to the sheet later stands down too. */
   body.sheet-peek .sheet > *:not(#sheetToggle):not(.bento),
   body.sheet-peek .bento > *:not(#detailPanel) { display: none; }
+  /* Except the plot bar. Standing the sheet down while drawing is exactly when
+     you want the map big, and taking the mode's own controls away with the
+     rest of the sheet would leave you looking at a route you could not edit.
+     Its help paragraph does go: it is three sentences and you have read them.
+     The `.sheet >` is not decoration: :not(#sheetToggle) above contributes an
+     id to that rule's specificity, so a shorter selector here loses to it. */
+  body.sheet-peek.plotting .sheet > #plotBar { display: grid; }
+  body.sheet-peek.plotting #plotHelp { display: none; }
+  /* And the profile goes instead. While you are drawing, the running total and
+     the controls are what you reach for; the elevation is what you read once
+     the route exists, which is what coming back out of peek is for. The status
+     line already carries the distance, the climb and the time. */
+  body.sheet-peek.plotting .bento { display: none; }
+  body.sheet-peek.plotting .plot-stats { font-size: 17px; }
   body.sheet-peek #detailPanel > .head,
   body.sheet-peek #detailPanel .chart-head,
   body.sheet-peek #detailPanel .scale,
@@ -695,23 +725,30 @@
   </div>
 
   <div id="searchPanel" class="tile glass" hidden>
-    <div class="field-grid">
-      <label>Distance km
-        <input type="text" id="distance" inputmode="decimal" value="5" aria-label="Distance in km">
-      </label>
-      <label>Climb
-        <select id="climbPreset" aria-label="Climb preset"></select>
-      </label>
-      <label>Shape
-        <select id="shape" aria-label="Route shape">
-          <option value="loop">Loop</option>
-          <option value="out_and_back">Out and back</option>
-        </select>
-      </label>
+    <!-- What a search is aiming at. Only find mode has a target, so this is the
+         one part of the panel that goes away while you are plotting. -->
+    <div id="findTargets">
+      <div class="field-grid">
+        <label>Distance km
+          <input type="text" id="distance" inputmode="decimal" value="5" aria-label="Distance in km">
+        </label>
+        <label>Climb
+          <select id="climbPreset" aria-label="Climb preset"></select>
+        </label>
+        <label>Shape
+          <select id="shape" aria-label="Route shape">
+            <option value="loop">Loop</option>
+            <option value="out_and_back">Out and back</option>
+          </select>
+        </label>
+      </div>
+      <div class="field">
+        <input type="text" id="climbExact" inputmode="numeric" placeholder="Exact metres of climb" aria-label="Exact metres of ascent">
+      </div>
     </div>
-    <div class="field">
-      <input type="text" id="climbExact" inputmode="numeric" placeholder="Exact metres of climb" aria-label="Exact metres of ascent">
-    </div>
+    <!-- Where you are looking, and how fast you run. Both modes want these:
+         plotting needs to reach a place, and the plot status line has always
+         quoted an estimated time from the pace box below. -->
     <div class="field">
       <input type="search" id="placeSearch" placeholder="Search a place or postcode"
              autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search for a start place">

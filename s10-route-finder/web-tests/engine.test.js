@@ -340,6 +340,77 @@ test('rank returns empty when nothing was generated', () => {
   assert.deepEqual(rank([]), []);
 });
 
+/* A route you drew by hand, or reopened from the library, was not trying to hit
+ * anything. Asked for an error against a target it never had, Candidate used to
+ * answer NaN, which printed as "NaN m on target" and failed every tolerance
+ * comparison, so the badge read "outside" forever. */
+const DRAWN = [[-1.5040, 53.3736, 100], [-1.5000, 53.3760, 130], [-1.4960, 53.3790, 120]];
+
+test('a candidate with no target reports no error rather than NaN', () => {
+  const c = new Candidate({
+    coords: DRAWN, distanceM: 9000,
+    targetDistanceM: null, targetAscentM: null,
+    strategy: 'plotted by hand', shape: 'plotted',
+  });
+
+  assert.equal(c.targeted, false);
+  assert.equal(c.distanceErrorM, null);
+  assert.equal(c.ascentErrorM, null);
+  assert.equal(c.relativeDistanceError, null);
+  assert.equal(c.relativeAscentError, null);
+  assert.equal(c.withinTolerance, null);
+  assert.equal(c.score, 0);
+
+  // The figures it does have are still real.
+  assert.equal(c.distanceM, 9000);
+  assert.ok(Number.isFinite(c.ascentM));
+  assert.ok(Number.isFinite(c.descentM));
+});
+
+test('an untargeted candidate carries nothing NaN into its payload', () => {
+  const payload = new Candidate({
+    coords: DRAWN, distanceM: 9000,
+    targetDistanceM: null, targetAscentM: null,
+    strategy: 'plotted by hand', shape: 'plotted',
+  }).toResult();
+
+  assert.equal(payload.targeted, false);
+  for (const key of ['targetDistanceKm', 'targetAscentM', 'distanceErrorKm',
+    'ascentErrorM', 'distanceErrorPct', 'ascentErrorPct', 'withinTolerance']) {
+    assert.equal(payload[key], null, `${key} should be null, got ${payload[key]}`);
+  }
+  assert.ok(Number.isFinite(payload.score));
+  assert.ok(Number.isFinite(payload.distanceKm) && Number.isFinite(payload.ascentM));
+});
+
+/* The specific shape of the original bug: targetAscentM was handed the whole
+ * {metres, label} object the climb preset returns, not its number. */
+test('a non-numeric target is treated as no target, not as NaN', () => {
+  const c = new Candidate({
+    coords: DRAWN, distanceM: 9000,
+    targetDistanceM: 5000, targetAscentM: { metres: 75, label: 'medium' },
+    strategy: 'plotted by hand', shape: 'plotted',
+  });
+
+  assert.equal(c.targeted, false);
+  assert.ok(!Number.isNaN(c.score));
+  assert.equal(c.withinTolerance, null);
+});
+
+test('a targeted candidate is unaffected', () => {
+  const c = new Candidate({
+    coords: DRAWN, distanceM: 5050,
+    targetDistanceM: 5000, targetAscentM: 50,
+    strategy: 'loop', shape: SHAPE_LOOP,
+  });
+
+  assert.equal(c.targeted, true);
+  assert.equal(c.distanceErrorM, 50);
+  assert.ok(c.relativeDistanceError > 0 && c.relativeDistanceError < 0.02);
+  assert.equal(typeof c.withinTolerance, 'boolean');
+  assert.ok(c.score > 0);
+});
+
 test('a rate limit stops the search and keeps what was found', async () => {
   const client = new FakeORS((n) => {
     if (n > 2) throw new RateLimitError('OpenRouteService rate limit hit (40 per minute).');

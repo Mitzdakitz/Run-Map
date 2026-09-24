@@ -130,7 +130,13 @@ function installErrorReporter() {
   ));
 }
 
+/* True only while boot() runs. setPlotMode says its piece about a missing key,
+ * which is the right thing when you choose the mode and a second copy of what
+ * boot already said when you merely arrive in it. */
+let booting = false;
+
 function boot() {
+  booting = true;
   installErrorReporter();
   /* Reading the store is 1.45 MB of JSON to parse. Doing it here put roughly
    * a quarter of a second on a phone in front of the first frame, before the
@@ -168,6 +174,14 @@ function boot() {
     message('warn', 'Add your OpenRouteService key in Settings at the bottom of the page before searching. '
       + 'It stays in this browser and is only ever sent to OpenRouteService.');
   }
+
+  /* Drawing your own is the thing this is for, so it is what you land in.
+   * Done by calling the switch rather than by starting `plot.active` true:
+   * setPlotMode returns early when the mode is already what you asked for, so
+   * a true default would skip all of its setup. This runs in the same task as
+   * the rest of boot, so nothing paints in between. */
+  setPlotMode(true);
+  booting = false;
   /* On a phone the address bar collapsing during a scroll fires resize, and
    * rebuilding the chart and re-measuring every Leaflet layer on each of those
    * is a lot of work for a scroll. Only a change of width can affect either,
@@ -468,7 +482,9 @@ function setPeek(on) {
  * different start, so that unlocks it again; so does having no results. */
 let startLocked = false;
 function refreshStartLock() {
-  const wanted = groups.length > 0 && $('searchPanel').hidden;
+  // Plot mode's groups hold the route you drew, which has nothing to say about
+  // the start pin — and the pin is not on the map there anyway.
+  const wanted = !plot.active && groups.length > 0 && $('searchPanel').hidden;
   startLocked = wanted;
   if (!startMarker) return;
   if (startMarker.dragging) {
@@ -924,7 +940,8 @@ function renderCards() {
     : 'Results';
 
   groups.forEach((group, gi) => {
-    if (gi > 0 || groups.length > 1) {
+    // A drawn route has no target to head the group with.
+    if (group.target && (gi > 0 || groups.length > 1)) {
       const heading = document.createElement('div');
       heading.className = 'group-heading';
       heading.textContent = `Search ${group.number}: ${group.target.distanceKm} km, `
@@ -956,23 +973,28 @@ function card(candidate, group, dom, gi, ri) {
 
   const title = document.createElement('div');
   title.className = 'title';
+  // A route with no target is neither within nor outside a tolerance.
   title.innerHTML = `<span class="dist num">${(candidate.distanceM / 1000).toFixed(2)} km</span>`
-    + `<span class="badge ${ok ? 'good' : 'bad'}">${ok ? '✓ within' : '! outside'} tolerance</span>`;
+    + (candidate.targeted
+      ? `<span class="badge ${ok ? 'good' : 'bad'}">${ok ? '✓ within' : '! outside'} tolerance</span>`
+      : '');
 
   const sub = document.createElement('div');
   sub.className = 'sub';
   sub.innerHTML = `<span class="num">${Math.round(candidate.ascentM)} m</span> climb`
     + (seconds === null ? '' : ` &middot; <span class="num">${formatDuration(seconds)}</span>`);
 
-  const err = document.createElement('div');
-  err.className = 'err';
-  const dErrKm = (candidate.distanceErrorM / 1000);
-  err.textContent = `${dErrKm > 0 ? '+' : ''}${dErrKm.toFixed(2)} km `
-    + `(${(candidate.relativeDistanceError * 100).toFixed(1)}%), `
-    + `${candidate.ascentErrorM > 0 ? '+' : ''}${Math.round(candidate.ascentErrorM)} m climb `
-    + `(${(candidate.relativeAscentError * 100).toFixed(1)}%)`;
-
-  mid.append(title, sub, err);
+  mid.append(title, sub);
+  if (candidate.targeted) {
+    const err = document.createElement('div');
+    err.className = 'err';
+    const dErrKm = (candidate.distanceErrorM / 1000);
+    err.textContent = `${dErrKm > 0 ? '+' : ''}${dErrKm.toFixed(2)} km `
+      + `(${(candidate.relativeDistanceError * 100).toFixed(1)}%), `
+      + `${candidate.ascentErrorM > 0 ? '+' : ''}${Math.round(candidate.ascentErrorM)} m climb `
+      + `(${(candidate.relativeAscentError * 100).toFixed(1)}%)`;
+    mid.append(err);
+  }
   button.append(pick, mid, sparkline(group.profiles[ri], dom));
   button.addEventListener('click', () => selectRoute(gi, ri, { fit: true }));
   return button;
@@ -984,9 +1006,11 @@ function card(candidate, group, dom, gi, ri) {
 function markHasResults() {
   if (!document.body || !document.body.classList) return;
   document.body.classList.toggle('has-results', groups.length > 0);
-  // Peek shows one chosen route. With no routes there is nothing to show, and
-  // the way back out is hidden along with the rest of the sheet.
-  if (!groups.length && peeking()) setPeek(false);
+  /* Peek shows one chosen route, so with no routes there is nothing to show
+   * and the way back out would be hidden with the rest of the sheet. Plotting
+   * is the exception: there peek shows the plot bar, which is worth looking at
+   * from the first point, before any route exists. */
+  if (!groups.length && !plot.active && peeking()) setPeek(false);
   refreshStartLock();
 }
 
@@ -1044,6 +1068,11 @@ function drawRoutes(fit) {
 
   const group = groups[selected.group];
   if (!group) return;
+
+  /* Plot mode draws its own line, with the waypoint markers and the hit strip
+   * that inserts a point. Drawing the candidate as well stacked two identical
+   * polylines on the same coordinates. */
+  if (group.plotted) { drawArrows(); return; }
 
   group.candidates.forEach((c, i) => {
     const latLngs = c.coords.map((p) => [p[1], p[0]]);
@@ -1322,10 +1351,16 @@ function refreshDetail() {
     ? 'Your route in detail'
     : `Route ${selected.route + 1} in detail`;
   $('mDist').textContent = `${(candidate.distanceM / 1000).toFixed(2)} km`;
-  $('mDistErr').textContent = `${candidate.distanceErrorM > 0 ? '+' : ''}`
-    + `${(candidate.distanceErrorM / 1000).toFixed(2)} km on target`;
   $('mClimb').textContent = `${Math.round(candidate.ascentM)} m`;
-  $('mClimbErr').textContent = `${candidate.ascentErrorM > 0 ? '+' : ''}${Math.round(candidate.ascentErrorM)} m on target`;
+  /* "On target" only means something when there was a target. A route you drew
+   * by hand has none, so the line goes rather than reporting against nothing. */
+  $('mDistErr').textContent = candidate.targeted
+    ? `${candidate.distanceErrorM > 0 ? '+' : ''}`
+      + `${(candidate.distanceErrorM / 1000).toFixed(2)} km on target`
+    : '';
+  $('mClimbErr').textContent = candidate.targeted
+    ? `${candidate.ascentErrorM > 0 ? '+' : ''}${Math.round(candidate.ascentErrorM)} m on target`
+    : '';
 
   const seconds = estimateSeconds(candidate.distanceM, candidate.ascentM, paceSeconds);
   $('timeMetric').hidden = seconds === null;
@@ -1335,8 +1370,11 @@ function refreshDetail() {
   }
 
   const badge = $('mBadge');
+  badge.hidden = !candidate.targeted;
   badge.className = `badge ${candidate.withinTolerance ? 'good' : 'bad'}`;
-  badge.textContent = `${candidate.withinTolerance ? '✓ within' : '! outside'} tolerance`;
+  badge.textContent = candidate.targeted
+    ? `${candidate.withinTolerance ? '✓ within' : '! outside'} tolerance`
+    : '';
 
   const climb = longestClimb(points);
   const steep = steepestWindow(points, 200);
@@ -1695,6 +1733,11 @@ function plotStatus(text) { $('plotStats').textContent = text; }
 
 function renderPlotStats() {
   const n = plot.waypoints.length;
+  /* First, not last. Every branch below returns, so an assignment at the end
+   * of this function only ran in the one case that reached it: Undo was left
+   * enabled with nothing to undo, and disabled with something to undo,
+   * depending on which message happened to be showing. */
+  $('plotUndo').disabled = plot.history.length === 0;
   if (plot.locked && !plot.busy && !rerouteTimer) {
     const so_far = n >= 2 && plot.route
       ? `${(plot.route.distanceM / 1000).toFixed(2)} km so far. `
@@ -1713,7 +1756,6 @@ function renderPlotStats() {
   const seconds = estimateSeconds(plot.route.distanceM, plot.route.ascentM, paceSeconds);
   const time = seconds ? `, about ${formatDuration(seconds)}` : '';
   plotStatus(`${km} km, ${up} m of climb${time}`);
-  $('plotUndo').disabled = plot.history.length === 0;
 }
 
 function plotBudgetText() {
@@ -1737,9 +1779,11 @@ async function reroute() {
   drawPlot();
   renderPlotStats();
   if (plot.waypoints.length < 2) {
+    // Below two points there is no route. showPlotAsResult returns early on a
+    // null route, so it cannot be what takes the old one off the screen.
     plot.route = null;
     drawPlot();
-    showPlotAsResult();
+    clearPlotResult();
     return;
   }
   // A request already out: remember to go round again rather than drop the edit.
@@ -1748,6 +1792,12 @@ async function reroute() {
   renderPlotStats();
   try {
     plot.route = await routeThrough(plot.client, plot.waypoints, { closeLoop: plot.closeLoop });
+    /* Every route that comes back carries elevation, and searching has always
+     * kept it. Plotting threw it away, so an app you mostly plot in learned
+     * nothing about the ground: the hills overlay and find mode's waypoint
+     * aiming both work off this store. */
+    store.addCoords(plot.route.coords);
+    saveTerrainSoon();
     clearMessages();
   } catch (err) {
     message('error', err.message);
@@ -1766,16 +1816,15 @@ async function reroute() {
  * without a second implementation. */
 function showPlotAsResult() {
   if (!plot.route) return;
-  const targetDistanceM = Number($('distance').value) * 1000;
-  const target = {
-    distanceKm: Number($('distance').value),
-    ascentM: targetAscentM(Number($('distance').value)),
-  };
+  /* No target. The distance and climb boxes belong to find mode and are hidden
+   * while you plot, so measuring against them compared a route you drew to a
+   * number you could not see: a 9 km route read "+4.00 km on target" against a
+   * default of 5. A drawn route is not trying to hit anything. */
   const candidate = new Candidate({
     coords: plot.route.coords,
     distanceM: plot.route.distanceM,
-    targetDistanceM,
-    targetAscentM: target.ascentM,
+    targetDistanceM: null,
+    targetAscentM: null,
     strategy: 'plotted by hand',
     shape: 'plotted',
   });
@@ -1784,7 +1833,7 @@ function showPlotAsResult() {
   groups.length = 0;
   groups.push({
     number: 0,
-    target,
+    target: null,
     plotted: true,
     candidates: [candidate],
     profiles: [profile(candidate.coords, candidate.distanceM)],
@@ -1815,10 +1864,15 @@ function setPlotMode(on) {
   $('modePlot').setAttribute('aria-pressed', String(on));
   $('modeFind').classList.toggle('on', !on);
   $('modePlot').classList.toggle('on', on);
-  // The targets only govern a search, so they go away when nothing is searching.
-  $('findQuery').hidden = on;
+  /* The header stays. Only the parts that govern a search go away, which the
+   * stylesheet does from this class. Hiding the whole thing meant that to plot
+   * a route anywhere but where you already were, you had to leave plot mode,
+   * search the place in find mode, and come back. */
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle('plotting', on);
+  }
+  // The cards are a search's results, and a drawn route is not one of those.
   $('resultsPanel').hidden = on;
-  if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
   $('plotBar').hidden = !on;
   $('crosshair').hidden = !on;
   $('plotLock').hidden = !on;
@@ -1829,7 +1883,10 @@ function setPlotMode(on) {
   }
   if (on) {
     if (!plot.client) plot.client = new OrsClient({ apiKey, budget: CONFIG.PLOT_BUDGET });
-    if (!apiKey) message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
+    // Boot already says the same thing once, and plot mode is where you land.
+    if (!apiKey && !booting) {
+      message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
+    }
     plotBudgetText();
   } else {
     $('budgetText').textContent = 'Tap the map to set your start';
@@ -1842,9 +1899,10 @@ function setPlotMode(on) {
   // Any in-flight edit belongs to the mode being left.
   if (rerouteTimer) { clearTimeout(rerouteTimer); rerouteTimer = null; }
 
-  // Peek belongs to whichever mode put it there, and the plot bar it hides is
-  // the whole point of the mode being arrived at.
-  setPeek(false);
+  /* Leaving a mode puts peek away, because the plot bar it hides is the whole
+   * point of the mode being arrived at. Arriving does not: plot mode is where
+   * a big map matters most, so a sheet you stood down stays down. */
+  if (!on) setPeek(false);
 
   // Bring the restored routes back into view: they may be somewhere else entirely.
   positionMapControls();
@@ -1856,8 +1914,37 @@ function clearPlot() {
   pushHistory();
   plot.waypoints = [];
   plot.route = null;
+  /* Clearing has to empty the workspace too, not just the map layer. The panel,
+   * the elevation chart and the candidate polyline are all drawn from `groups`,
+   * so leaving the old candidate there left a cleared route still on screen,
+   * and Save would then have written that stale route to the library as though
+   * it had never been plotted. */
+  clearPlotResult();
   drawPlot();
   renderPlotStats();
+}
+
+/* The plotting client is built once, on first entry to plot mode, and holds the
+ * key it was given then. Pasting a key afterwards used to leave it holding the
+ * empty string, so every edit failed with "No OpenRouteService API key set"
+ * until the page was reloaded. The spend carries over, so re-saving the same
+ * key is not a way to win back budget. */
+function rebuildPlotClient() {
+  if (!plot.client) return;
+  const spent = plot.client.requestsUsed;
+  plot.client = new OrsClient({ apiKey, budget: CONFIG.PLOT_BUDGET });
+  plot.client.requestsUsed = spent;
+  if (plot.active) plotBudgetText();
+}
+
+/* Takes the drawn route out of the shared workspace. Used wherever plot mode
+ * stops having a route: cleared, undone below two points, or a failed reroute. */
+function clearPlotResult() {
+  if (!groups.length) return;
+  groups.length = 0;
+  selected = { group: 0, route: 0 };
+  activeProfile = [];
+  refreshDisplay();
 }
 
 function undoPlot() {
@@ -1986,17 +2073,20 @@ function openSaved(id) {
     message('info', `"${saved.name}" opened for editing. Drag its points to change it.`);
   } else {
     if (plot.active) setPlotMode(false);
+    /* A saved route has no target either. It used to be given itself as its
+     * own target, which made every reopened route read "0.00 km on target" and
+     * "within tolerance" — true by construction and worth nothing. */
     const candidate = new Candidate({
       coords: saved.coords,
       distanceM: saved.distanceM,
-      targetDistanceM: saved.distanceM,
-      targetAscentM: saved.ascentM || 1,
+      targetDistanceM: null,
+      targetAscentM: null,
       strategy: `saved as "${saved.name}"`,
       shape: saved.closeLoop ? SHAPE_LOOP : 'saved',
     });
     rememberGroup({
       number: 0,
-      target: { distanceKm: saved.distanceM / 1000, ascentM: saved.ascentM },
+      target: null,
       candidates: [candidate],
       profiles: [profile(candidate.coords, candidate.distanceM)],
     });
@@ -2117,6 +2207,7 @@ function wireEvents() {
     if (!value) { message('error', 'Paste your key first.'); return; }
     apiKey = value;
     renderKeyState();
+    rebuildPlotClient();
     if (!write(STORAGE.key, value)) {
       message('warn', 'This browser refused to save the key, which happens in Private Browsing. '
         + 'It will work for this session but you will have to paste it again next time.');
@@ -2175,6 +2266,7 @@ function wireEvents() {
     apiKey = '';
     write(STORAGE.key, '');
     renderKeyState();
+    rebuildPlotClient();
     clearMessages();
     message('warn', 'Key removed from this browser. Searching needs one.');
   });
@@ -2183,6 +2275,9 @@ function wireEvents() {
     paceSeconds = parsePace(e.target.value);
     write(STORAGE.pace, e.target.value);
     if (groups.length) { renderCards(); refreshDetail(); }
+    // The plot status line quotes a time too, and the pace box is reachable
+    // from plot mode now, so it has to be told the pace changed.
+    if (plot.active) renderPlotStats();
   });
   $('clearPace').addEventListener('click', () => {
     $('pace').value = '';

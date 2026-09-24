@@ -455,18 +455,31 @@ export class Candidate {
     this.descentM = descent;
   }
 
-  get distanceErrorM() { return this.distanceM - this.targetDistanceM; }
-  get ascentErrorM() { return this.ascentM - this.targetAscentM; }
+  /* A route you drew by hand has no target: it is whatever you drew. Asked for
+   * one anyway, the errors below would be measured against nothing and print as
+   * NaN, and the tolerance badge would read "outside" forever because NaN fails
+   * every comparison. Untargeted candidates answer null instead, and callers
+   * leave the line out rather than printing a judgement nobody asked for. */
+  get targeted() {
+    return Number.isFinite(this.targetDistanceM) && Number.isFinite(this.targetAscentM);
+  }
+
+  get distanceErrorM() { return this.targeted ? this.distanceM - this.targetDistanceM : null; }
+  get ascentErrorM() { return this.targeted ? this.ascentM - this.targetAscentM : null; }
   get relativeDistanceError() {
+    if (!this.targeted) return null;
     return Math.abs(this.distanceErrorM) / Math.max(this.targetDistanceM, 1);
   }
   get relativeAscentError() {
+    if (!this.targeted) return null;
     return Math.abs(this.ascentErrorM) / Math.max(this.targetAscentM, 1);
   }
   get score() {
+    if (!this.targeted) return 0;
     return CONFIG.W_DIST * this.relativeDistanceError + CONFIG.W_ASC * this.relativeAscentError;
   }
   get withinTolerance() {
+    if (!this.targeted) return null;
     return this.relativeDistanceError <= CONFIG.DISTANCE_TOLERANCE
       && this.relativeAscentError <= CONFIG.ASCENT_TOLERANCE;
   }
@@ -477,12 +490,13 @@ export class Candidate {
       distanceKm: Math.round(this.distanceM / 10) / 100,
       ascentM: Math.round(this.ascentM),
       descentM: Math.round(this.descentM),
-      targetDistanceKm: Math.round(this.targetDistanceM / 10) / 100,
-      targetAscentM: Math.round(this.targetAscentM),
-      distanceErrorKm: Math.round(this.distanceErrorM / 10) / 100,
-      ascentErrorM: Math.round(this.ascentErrorM),
-      distanceErrorPct: Math.round(1000 * this.relativeDistanceError) / 10,
-      ascentErrorPct: Math.round(1000 * this.relativeAscentError) / 10,
+      targeted: this.targeted,
+      targetDistanceKm: this.targeted ? Math.round(this.targetDistanceM / 10) / 100 : null,
+      targetAscentM: this.targeted ? Math.round(this.targetAscentM) : null,
+      distanceErrorKm: this.targeted ? Math.round(this.distanceErrorM / 10) / 100 : null,
+      ascentErrorM: this.targeted ? Math.round(this.ascentErrorM) : null,
+      distanceErrorPct: this.targeted ? Math.round(1000 * this.relativeDistanceError) / 10 : null,
+      ascentErrorPct: this.targeted ? Math.round(1000 * this.relativeAscentError) / 10 : null,
       withinTolerance: this.withinTolerance,
       score: this.score,
       strategy: this.strategy,
