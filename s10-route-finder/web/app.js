@@ -1630,20 +1630,25 @@ function aimPoint() {
   } catch { return centre; }
 }
 
+/* A node, not a numbered disc. The numbers said what you could already see —
+ * the order you placed them in — and at 22px each they covered the junctions
+ * you were trying to aim at. The ends still read differently, because which
+ * way round a route goes is the one thing the shape does not tell you. */
 function plotIcon(index, total) {
   const first = index === 0;
-  const last = index === total - 1 && total > 1;
+  const last = index === total - 1 && total > 1 && !plot.closeLoop;
+  const end = first || last;
   const fill = first ? mapInk() : (last ? mapEnd() : '#FFFFFF');
-  const ink = first || last ? '#FFFFFF' : mapInk();
-  const label = first ? 'S' : (last && !plot.closeLoop ? 'F' : String(index + 1));
+  const size = end ? 14 : 11;
+  const half = size / 2;
+  const r = end ? 5 : 3.5;
   return L.divIcon({
     className: '',
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
-    html: `<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">`
-      + `<circle cx="11" cy="11" r="9" fill="${fill}" stroke="${mapInk()}" stroke-width="2"/>`
-      + `<text x="11" y="15" text-anchor="middle" font-size="10" font-weight="700"`
-      + ` font-family="system-ui,sans-serif" fill="${ink}">${label}</text></svg>`,
+    iconSize: [size, size],
+    iconAnchor: [half, half],
+    html: `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">`
+      + `<circle cx="${half}" cy="${half}" r="${r}" fill="${fill}"`
+      + ` stroke="#FFFFFF" stroke-width="${end ? 2 : 1.5}"/></svg>`,
   });
 }
 
@@ -1902,10 +1907,12 @@ function setPlotMode(on) {
   // Any in-flight edit belongs to the mode being left.
   if (rerouteTimer) { clearTimeout(rerouteTimer); rerouteTimer = null; }
 
-  /* Leaving a mode puts peek away, because the plot bar it hides is the whole
-   * point of the mode being arrived at. Arriving does not: plot mode is where
-   * a big map matters most, so a sheet you stood down stays down. */
-  if (!on) setPeek(false);
+  /* Plot mode opens stood down, and find mode opens up. Drawing wants the map
+   * and one line of numbers; the moment a first point turned into a route, the
+   * full panel used to unfold under it and take half the screen. The sheet
+   * button still says "Show details" for the chart when the route is worth
+   * reading rather than drawing. */
+  setPeek(on);
 
   // Bring the restored routes back into view: they may be somewhere else entirely.
   positionMapControls();
@@ -2214,7 +2221,6 @@ function wireEvents() {
 
   $('modeFind').addEventListener('click', () => setPlotMode(false));
   $('modePlot').addEventListener('click', () => setPlotMode(true));
-  $('plotDone').addEventListener('click', () => setPlotMode(false));
   $('plotClear').addEventListener('click', clearPlot);
   $('plotUndo').addEventListener('click', undoPlot);
   $('plotLoop').addEventListener('click', function toggleLoop() {

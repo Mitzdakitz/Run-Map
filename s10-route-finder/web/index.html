@@ -326,7 +326,10 @@
     padding: 4px 0 6px; margin: 0; cursor: pointer; font: 600 12px "Figtree", sans-serif;
     flex-direction: column; align-items: center; gap: 5px; min-height: 44px;
   }
-  body.has-results .grabber-btn { display: flex; }
+  /* Plot mode opens stood down, so the way back up has to be there from the
+     first point, before any route exists to have results from. */
+  body.has-results .grabber-btn,
+  body.plotting .grabber-btn { display: flex; }
   .grabber-btn:hover { color: var(--ink); }
   .grabber-btn:hover .grabber { opacity: .34; }
 
@@ -370,6 +373,12 @@
      Its help paragraph does go: it is three sentences and you have read them.
      The `.sheet >` is not decoration: :not(#sheetToggle) above contributes an
      id to that rule's specificity, so a shorter selector here loses to it. */
+  /* The bar across the top stays while plotting. Peek in find mode is a
+     gesture you make and undo to look at the map; in plot mode it is simply
+     what the mode looks like, and you are in it the whole time you draw. Take
+     the mode switch away for that long and the only way back to Find is to
+     expand the sheet first, which is the trap the Finish button was. */
+  body.sheet-peek.plotting .topbar { display: flex; }
   body.sheet-peek.plotting .sheet > #plotBar { display: grid; }
   body.sheet-peek.plotting #plotHelp { display: none; }
   /* And the profile goes instead. While you are drawing, the running total and
@@ -507,8 +516,6 @@
   .plot-stats { margin: 0; font-family: "Caprasimo", ui-serif, serif; font-size: 22px; line-height: 1.15; letter-spacing: -.01em; }
   .plot-stats .num { font-variant-numeric: tabular-nums; }
   .plot-actions { display: flex; gap: 7px; flex-wrap: wrap; }
-  .plot-actions #plotDone { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
-  .plot-actions #plotDone:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
 
   .map-shell { position: absolute; inset: 0; }
   /* The container reaches past the bottom of its layer. Whatever the browser
@@ -785,7 +792,6 @@
         <button class="chip" type="button" id="plotLoop" aria-pressed="false">Close the loop</button>
         <button class="chip" type="button" id="plotUndo">Undo</button>
         <button class="chip" type="button" id="plotClear">Clear</button>
-        <button class="chip" type="button" id="plotDone">Finish</button>
       </div>
       <p class="hint" id="plotHelp" style="margin:0">
         Drag the map so the crosshair sits where you want to go, then let go: the point
