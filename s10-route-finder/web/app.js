@@ -130,13 +130,7 @@ function installErrorReporter() {
   ));
 }
 
-/* True only while boot() runs. setPlotMode says its piece about a missing key,
- * which is the right thing when you choose the mode and a second copy of what
- * boot already said when you merely arrive in it. */
-let booting = false;
-
 function boot() {
-  booting = true;
   installErrorReporter();
   /* Reading the store is 1.45 MB of JSON to parse. Doing it here put roughly
    * a quarter of a second on a phone in front of the first frame, before the
@@ -175,13 +169,11 @@ function boot() {
       + 'It stays in this browser and is only ever sent to OpenRouteService.');
   }
 
-  /* Drawing your own is the thing this is for, so it is what you land in.
-   * Done by calling the switch rather than by starting `plot.active` true:
-   * setPlotMode returns early when the mode is already what you asked for, so
-   * a true default would skip all of its setup. This runs in the same task as
-   * the rest of boot, so nothing paints in between. */
-  setPlotMode(true);
-  booting = false;
+  /* Find is where you land. Plot mode was tried here and read wrong: the thing
+   * you usually want is a route found for you, and having to reach for Find
+   * first put the common case two taps away. The work that went with the
+   * experiment stays — plot mode can reach a place, set a pace and keep peek
+   * without leaving the route you are drawing — it just is not the front door. */
   /* On a phone the address bar collapsing during a scroll fires resize, and
    * rebuilding the chart and re-measuring every Leaflet layer on each of those
    * is a lot of work for a scroll. Only a change of width can affect either,
@@ -481,6 +473,16 @@ function setPeek(on) {
  * quietly did nothing. Opening the search panel is the way to say you want a
  * different start, so that unlocks it again; so does having no results. */
 let startLocked = false;
+/* Opening the panel means a new search is being set up, so the start becomes
+ * movable again; closing it without searching locks it back to the results it
+ * belongs to. */
+function setSearchPanel(open) {
+  $('searchPanel').hidden = !open;
+  $('editSearch').setAttribute('aria-expanded', String(open));
+  $('editCue').textContent = open ? 'Close' : 'Edit';
+  refreshStartLock();
+}
+
 function refreshStartLock() {
   // Plot mode's groups hold the route you drew, which has nothing to say about
   // the start pin — and the pin is not on the map there anyway.
@@ -786,6 +788,10 @@ async function runSearch() {
   if (ascent.error) { message('error', ascent.error); return; }
 
   const shape = $('shape').value;
+  /* The targets are set, so the panel that sets them gets out of the way: the
+   * results arrive underneath it otherwise. Only once the search is actually
+   * going — a rejected one leaves the panel open on the field that was wrong. */
+  setSearchPanel(false);
   setBusy(true);
 
   /* Learn the ground before choosing where to aim. Waypoints go out to roughly
@@ -1883,10 +1889,7 @@ function setPlotMode(on) {
   }
   if (on) {
     if (!plot.client) plot.client = new OrsClient({ apiKey, budget: CONFIG.PLOT_BUDGET });
-    // Boot already says the same thing once, and plot mode is where you land.
-    if (!apiKey && !booting) {
-      message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
-    }
+    if (!apiKey) message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
     plotBudgetText();
   } else {
     $('budgetText').textContent = 'Tap the map to set your start';
@@ -2165,16 +2168,7 @@ function locateMe() {
 
 // --- events ----------------------------------------------------------------
 function wireEvents() {
-  $('editSearch').addEventListener('click', function toggle() {
-    const panel = $('searchPanel');
-    const opening = panel.hidden;
-    panel.hidden = !opening;
-    this.setAttribute('aria-expanded', String(opening));
-    $('editCue').textContent = opening ? 'Close' : 'Edit';
-    // Opening the panel means a new search is being set up, so the start is
-    // movable again; closing it without searching locks it back to the results.
-    refreshStartLock();
-  });
+  $('editSearch').addEventListener('click', () => setSearchPanel($('searchPanel').hidden));
 
   ['distance', 'climbPreset', 'climbExact', 'shape'].forEach((id) => {
     $(id).addEventListener('input', updateSummary);
