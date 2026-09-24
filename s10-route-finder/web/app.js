@@ -130,7 +130,13 @@ function installErrorReporter() {
   ));
 }
 
+/* True only while boot() runs. setPlotMode says its piece about a missing key,
+ * which is the right thing when you choose the mode and a second copy of what
+ * boot already said when you merely arrive in it. */
+let booting = false;
+
 function boot() {
+  booting = true;
   installErrorReporter();
   /* Reading the store is 1.45 MB of JSON to parse. Doing it here put roughly
    * a quarter of a second on a phone in front of the first frame, before the
@@ -168,6 +174,14 @@ function boot() {
     message('warn', 'Add your OpenRouteService key in Settings at the bottom of the page before searching. '
       + 'It stays in this browser and is only ever sent to OpenRouteService.');
   }
+
+  /* Drawing your own is the thing this is for, so it is what you land in.
+   * Done by calling the switch rather than by starting `plot.active` true:
+   * setPlotMode returns early when the mode is already what you asked for, so
+   * a true default would skip all of its setup. This runs in the same task as
+   * the rest of boot, so nothing paints in between. */
+  setPlotMode(true);
+  booting = false;
   /* On a phone the address bar collapsing during a scroll fires resize, and
    * rebuilding the chart and re-measuring every Leaflet layer on each of those
    * is a lot of work for a scroll. Only a change of width can affect either,
@@ -468,7 +482,9 @@ function setPeek(on) {
  * different start, so that unlocks it again; so does having no results. */
 let startLocked = false;
 function refreshStartLock() {
-  const wanted = groups.length > 0 && $('searchPanel').hidden;
+  // Plot mode's groups hold the route you drew, which has nothing to say about
+  // the start pin — and the pin is not on the map there anyway.
+  const wanted = !plot.active && groups.length > 0 && $('searchPanel').hidden;
   startLocked = wanted;
   if (!startMarker) return;
   if (startMarker.dragging) {
@@ -990,9 +1006,11 @@ function card(candidate, group, dom, gi, ri) {
 function markHasResults() {
   if (!document.body || !document.body.classList) return;
   document.body.classList.toggle('has-results', groups.length > 0);
-  // Peek shows one chosen route. With no routes there is nothing to show, and
-  // the way back out is hidden along with the rest of the sheet.
-  if (!groups.length && peeking()) setPeek(false);
+  /* Peek shows one chosen route, so with no routes there is nothing to show
+   * and the way back out would be hidden with the rest of the sheet. Plotting
+   * is the exception: there peek shows the plot bar, which is worth looking at
+   * from the first point, before any route exists. */
+  if (!groups.length && !plot.active && peeking()) setPeek(false);
   refreshStartLock();
 }
 
@@ -1774,6 +1792,12 @@ async function reroute() {
   renderPlotStats();
   try {
     plot.route = await routeThrough(plot.client, plot.waypoints, { closeLoop: plot.closeLoop });
+    /* Every route that comes back carries elevation, and searching has always
+     * kept it. Plotting threw it away, so an app you mostly plot in learned
+     * nothing about the ground: the hills overlay and find mode's waypoint
+     * aiming both work off this store. */
+    store.addCoords(plot.route.coords);
+    saveTerrainSoon();
     clearMessages();
   } catch (err) {
     message('error', err.message);
@@ -1840,10 +1864,15 @@ function setPlotMode(on) {
   $('modePlot').setAttribute('aria-pressed', String(on));
   $('modeFind').classList.toggle('on', !on);
   $('modePlot').classList.toggle('on', on);
-  // The targets only govern a search, so they go away when nothing is searching.
-  $('findQuery').hidden = on;
+  /* The header stays. Only the parts that govern a search go away, which the
+   * stylesheet does from this class. Hiding the whole thing meant that to plot
+   * a route anywhere but where you already were, you had to leave plot mode,
+   * search the place in find mode, and come back. */
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle('plotting', on);
+  }
+  // The cards are a search's results, and a drawn route is not one of those.
   $('resultsPanel').hidden = on;
-  if (on) { $('searchPanel').hidden = true; $('editSearch').setAttribute('aria-expanded', 'false'); }
   $('plotBar').hidden = !on;
   $('crosshair').hidden = !on;
   $('plotLock').hidden = !on;
@@ -1854,7 +1883,10 @@ function setPlotMode(on) {
   }
   if (on) {
     if (!plot.client) plot.client = new OrsClient({ apiKey, budget: CONFIG.PLOT_BUDGET });
-    if (!apiKey) message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
+    // Boot already says the same thing once, and plot mode is where you land.
+    if (!apiKey && !booting) {
+      message('error', 'Plotting needs your OpenRouteService key. Add one in Settings.');
+    }
     plotBudgetText();
   } else {
     $('budgetText').textContent = 'Tap the map to set your start';
@@ -1867,9 +1899,10 @@ function setPlotMode(on) {
   // Any in-flight edit belongs to the mode being left.
   if (rerouteTimer) { clearTimeout(rerouteTimer); rerouteTimer = null; }
 
-  // Peek belongs to whichever mode put it there, and the plot bar it hides is
-  // the whole point of the mode being arrived at.
-  setPeek(false);
+  /* Leaving a mode puts peek away, because the plot bar it hides is the whole
+   * point of the mode being arrived at. Arriving does not: plot mode is where
+   * a big map matters most, so a sheet you stood down stays down. */
+  if (!on) setPeek(false);
 
   // Bring the restored routes back into view: they may be somewhere else entirely.
   positionMapControls();
@@ -2242,6 +2275,9 @@ function wireEvents() {
     paceSeconds = parsePace(e.target.value);
     write(STORAGE.pace, e.target.value);
     if (groups.length) { renderCards(); refreshDetail(); }
+    // The plot status line quotes a time too, and the pace box is reachable
+    // from plot mode now, so it has to be told the pace changed.
+    if (plot.active) renderPlotStats();
   });
   $('clearPace').addEventListener('click', () => {
     $('pace').value = '';
