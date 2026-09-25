@@ -746,11 +746,31 @@
           <select id="shape" aria-label="Route shape">
             <option value="loop">Loop</option>
             <option value="out_and_back">Out and back</option>
+            <option value="point_to_point">To a finish</option>
           </select>
         </label>
       </div>
       <div class="field">
         <input type="text" id="climbExact" inputmode="numeric" placeholder="Exact metres of climb" aria-label="Exact metres of ascent">
+      </div>
+      <p class="hint" style="margin:0" id="distanceFloorNote" hidden>
+        That is shorter than the way between your two points, so the search will
+        aim at the shortest it can be instead.
+      </p>
+      <!-- Only for a route that ends somewhere else. The floor line says the
+           shortest the run between these two points can be, which is measured
+           by routing them once rather than assumed from the crow flies. -->
+      <div id="finishRow" hidden>
+        <div class="field">
+          <input type="search" id="finishSearch" placeholder="Finish: search a place or postcode"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 aria-label="Search for a finish place">
+          <button type="button" class="small" id="clearFinish">Clear</button>
+        </div>
+        <div class="results-list" id="finishResults" hidden></div>
+        <p class="hint" style="margin:0" id="finishNote">
+          Choose a finish, or drag the orange pin on the map.
+        </p>
       </div>
     </div>
     <!-- Where you are looking, and how fast you run. Both modes want these:

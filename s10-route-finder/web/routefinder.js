@@ -7,7 +7,9 @@
  *
  * Kept free of DOM and browser globals so it can be unit tested under node.
  */
-import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
+import {
+  CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, SHAPE_POINT_TO_POINT, STORAGE,
+} from './config.js';
 
 const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 111320;
@@ -41,6 +43,55 @@ export function destination(lat, lon, bearingDeg, distanceM) {
     Math.cos(d) - Math.sin(p1) * Math.sin(p2),
   );
   return { lat: (p2 * 180) / Math.PI, lon: (((l2 * 180) / Math.PI + 540) % 360) - 180 };
+}
+
+/* Initial bearing from one point to another, in degrees clockwise from north.
+ * The companion to `destination`: that one walks a bearing, this one reads it. */
+export function bearingDeg(lat1, lon1, lat2, lon2) {
+  const p1 = (lat1 * Math.PI) / 180;
+  const p2 = (lat2 * Math.PI) / 180;
+  const dl = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360;
+}
+
+/* How far off the straight line between two points a single waypoint has to sit
+ * for the round of it to come to a given length.
+ *
+ * Out and back has to guess how far to send you, and that guess is one of the
+ * things currently overshooting. Here nothing needs guessing, because the shape
+ * is determined. With the two points `crowM` apart and a detour through a point
+ * `h` off the line at `position` along it, the straight-line path is
+ *
+ *     L = hypot(a, h) + hypot(crowM - a, h),   a = position * crowM
+ *
+ * which at the midpoint is the isosceles 2*sqrt((crowM/2)^2 + h^2). Roads are
+ * not straight, so `inflation` is how much longer the real route between these
+ * two points turned out than the crow flies — measured on the direct route, not
+ * assumed — and the straight-line length to aim for is targetM / inflation.
+ *
+ * Returns 0 when the target is already at or under the direct distance: there
+ * is no detour that makes a route shorter than the shortest one.
+ */
+export function detourOffsetM(crowM, targetM, inflation = 1, position = 0.5) {
+  const wanted = targetM / Math.max(inflation, 0.01);
+  if (!(crowM > 0) || !(wanted > crowM)) return 0;
+  const a = Math.max(1, Math.min(crowM - 1, position * crowM));
+  const b = crowM - a;
+  /* Solve hypot(a,h) + hypot(b,h) = wanted for h. That is an ellipse with the
+   * two points as foci, so h is its semi-minor axis: with 2c = crowM the focal
+   * separation and 2s = wanted the string length, h^2 = s^2 - c^2 only when the
+   * bulge is central. Off-centre the tangent point moves, so solve numerically
+   * rather than pretend the closed form still holds. */
+  let lo = 0;
+  let hi = wanted / 2;
+  for (let i = 0; i < 60; i += 1) {
+    const mid = (lo + hi) / 2;
+    const len = Math.hypot(a, mid) + Math.hypot(b, mid);
+    if (len < wanted) lo = mid; else hi = mid;
+  }
+  return (lo + hi) / 2;
 }
 
 // --- ascent ----------------------------------------------------------------
@@ -746,9 +797,140 @@ async function searchOutAndBack(start, targetDistanceM, targetAscentM, client, s
   return candidates;
 }
 
+/* The shortest route between two points, which is both the floor on what can
+ * be asked for and the zero-detour answer when what was asked for is close to
+ * it. Separate from the search so the interface can spend it once when the
+ * finish pin lands and hand the result back in. */
+export async function directRoute(client, a, b) {
+  const result = { warnings: [] };
+  const got = await attempt(client, result, [[a.lon, a.lat], [b.lon, b.lat]]);
+  return { route: got, warnings: result.warnings };
+}
+
+/* Point to point. Same two passes as out and back — try a spread, then refine
+ * whichever error dominates — but the first pass is aimed rather than swept,
+ * because the geometry says where the waypoint has to be for the route to come
+ * to the length asked for. What it cannot know is what the ground does out
+ * there, which is what the spread and the refinement are for. */
+async function searchPointToPoint(start, finish, targetDistanceM, targetAscentM,
+                                  client, store, rng, result, direct) {
+  const candidates = [];
+  let bearingOnlyUsed = false;
+
+  const crowM = haversineM(start.lat, start.lon, finish.lat, finish.lon);
+  const axis = bearingDeg(start.lat, start.lon, finish.lat, finish.lon);
+  const prefer = outAndBackPrefer(targetDistanceM, targetAscentM);
+
+  // How much longer the road is than the crow flies, here, measured.
+  let inflation = 1;
+  if (direct && direct.coords && direct.coords.length) {
+    store.addCoords(direct.coords);
+    if (crowM > 0) inflation = Math.max(1, direct.distanceM / crowM);
+    candidates.push(new Candidate({
+      coords: direct.coords,
+      distanceM: direct.distanceM,
+      targetDistanceM,
+      targetAscentM,
+      strategy: 'direct',
+      shape: SHAPE_POINT_TO_POINT,
+      meta: { offsetM: 0, side: 1, position: 0.5, prefer },
+    }));
+  }
+
+  const legFor = async (offsetM, side, position, mode) => {
+    if (offsetM <= 0) return { got: null, offsetM };
+    const along = destination(start.lat, start.lon, axis, position * crowM);
+    const picked = store.pickWaypoint(
+      along.lat, along.lon, (axis + 90 * side + 360) % 360, offsetM, mode,
+    );
+    bearingOnlyUsed = bearingOnlyUsed || !picked.usedStore;
+    const got = await attempt(client, result, [
+      [start.lon, start.lat],
+      [picked.point.lon, picked.point.lat],
+      [finish.lon, finish.lat],
+    ]);
+    return { got, offsetM };
+  };
+
+  try {
+    const positions = CONFIG.P2P_BULGE_POSITIONS;
+    for (let i = 0; i < CONFIG.P2P_DESTINATIONS; i += 1) {
+      const position = positions[i % positions.length];
+      const side = i % 2 === 0 ? 1 : -1;
+      const offsetM = detourOffsetM(crowM, targetDistanceM, inflation, position);
+      // Nothing to try: the target is at or under the direct route, and the
+      // direct route is already in the list.
+      if (offsetM <= 0) break;
+      const { got } = await legFor(offsetM, side, position, prefer);
+      if (!got) continue;
+      store.addCoords(got.coords);
+      candidates.push(new Candidate({
+        coords: got.coords,
+        distanceM: got.distanceM,
+        targetDistanceM,
+        targetAscentM,
+        strategy: 'detour',
+        shape: SHAPE_POINT_TO_POINT,
+        meta: { offsetM, side, position, prefer },
+      }));
+    }
+
+    const toRefine = candidates
+      .filter((c) => c.meta.offsetM > 0)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, CONFIG.REFINE_TOP_N);
+    for (const candidate of toRefine) {
+      let { offsetM, side, position } = candidate.meta;
+      let mode = candidate.meta.prefer;
+      let strategy;
+      if (candidate.relativeDistanceError >= candidate.relativeAscentError) {
+        /* Too long or too short: the bulge is the only thing that sets the
+         * length, so move it. Scaling by the ratio overshoots, because the
+         * length grows more slowly than the offset does once the detour is
+         * wide, so take the straight-line geometry's answer for the length we
+         * actually got and correct the inflation estimate from it. */
+        const got = Math.max(candidate.distanceM, 1);
+        const measured = Math.max(1, got / Math.max(
+          2 * Math.hypot(crowM / 2, offsetM) || 1, 1,
+        ));
+        offsetM = detourOffsetM(crowM, targetDistanceM, measured, position);
+        strategy = 'detour_resized';
+      } else {
+        // Right length, wrong ground: same size of detour, other side.
+        side = -side;
+        mode = preferFor(candidate);
+        strategy = 'detour_other_side';
+      }
+      const { got } = await legFor(offsetM, side, position, mode);
+      if (!got) continue;
+      store.addCoords(got.coords);
+      candidates.push(new Candidate({
+        coords: got.coords,
+        distanceM: got.distanceM,
+        targetDistanceM,
+        targetAscentM,
+        strategy,
+        shape: SHAPE_POINT_TO_POINT,
+        meta: { offsetM, side, position, prefer: mode },
+      }));
+    }
+  } catch (err) {
+    if (!(err instanceof StopSearch)) throw err;
+    if (err.stopMessage) result.stoppedEarly = err.stopMessage;
+  }
+
+  if (bearingOnlyUsed) {
+    result.warnings.push(
+      'The terrain store is still sparse between these points, so the detours were '
+      + 'placed by geometry alone. Results improve as you run more searches here.',
+    );
+  }
+  return candidates;
+}
+
 /* One search. Never spends more than the client's remaining budget. */
-export async function search({ start, targetDistanceM, targetAscentM, shape, client, store,
-                               rng = Math.random }) {
+export async function search({ start, finish = null, targetDistanceM, targetAscentM, shape,
+                               client, store, direct = null, rng = Math.random }) {
   const result = { candidates: [], warnings: [], stoppedEarly: null, requestsUsed: 0, cacheHits: 0 };
   let candidates;
   if (shape === SHAPE_LOOP) {
@@ -756,6 +938,11 @@ export async function search({ start, targetDistanceM, targetAscentM, shape, cli
   } else if (shape === SHAPE_OUT_AND_BACK) {
     candidates = await searchOutAndBack(
       start, targetDistanceM, targetAscentM, client, store, rng, result,
+    );
+  } else if (shape === SHAPE_POINT_TO_POINT) {
+    if (!finish) throw new Error('A point to point search needs a finish.');
+    candidates = await searchPointToPoint(
+      start, finish, targetDistanceM, targetAscentM, client, store, rng, result, direct,
     );
   } else {
     throw new Error(`Unknown shape: ${shape}`);

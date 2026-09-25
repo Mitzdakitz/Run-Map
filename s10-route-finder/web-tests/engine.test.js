@@ -3,11 +3,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK } from '../web/config.js';
+import {
+  CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, SHAPE_POINT_TO_POINT,
+} from '../web/config.js';
 import {
   BudgetExhausted, Candidate, OrsClient, RateLimitError, TerrainStore,
-  ascentDescent, haversineM, makeRng, parseRoute, rank, recentRequestCount,
-  resetRateLimit, search,
+  ascentDescent, detourOffsetM, haversineM, makeRng, parseRoute, rank,
+  recentRequestCount, resetRateLimit, search,
 } from '../web/routefinder.js';
 
 const START = { lat: 53.3736, lon: -1.5040 };
@@ -90,6 +92,153 @@ function runLoop(client, opts = {}) {
     rng: makeRng(opts.seed ?? 42),
   });
 }
+
+const P2P_FINISH = { lat: 53.3900, lon: -1.4700 };
+
+/* A service whose routes are the straight lines it was asked for, `inflation`
+ * times longer because roads bend. That is the model the detour geometry
+ * assumes, so a search against it ought to land on what it asked for; against
+ * the real thing it will not, which is what the refinement pass is for. */
+function roadLike(inflation = 1.3, climbPerKm = 10) {
+  return (n, coordinates) => {
+    let straight = 0;
+    for (let i = 1; i < coordinates.length; i += 1) {
+      straight += haversineM(
+        coordinates[i - 1][1], coordinates[i - 1][0],
+        coordinates[i][1], coordinates[i][0],
+      );
+    }
+    const distanceM = straight * inflation;
+    return fakeRoute(distanceM, (distanceM / 1000) * climbPerKm);
+  };
+}
+
+function runP2P(client, opts = {}) {
+  return search({
+    start: START,
+    finish: opts.finish || P2P_FINISH,
+    targetDistanceM: opts.distanceM ?? 8000,
+    targetAscentM: opts.ascentM ?? 80,
+    shape: SHAPE_POINT_TO_POINT,
+    client,
+    store: opts.store || newStore(),
+    direct: opts.direct ?? null,
+    rng: makeRng(opts.seed ?? 42),
+  });
+}
+
+// --- point to point geometry ------------------------------------------------
+test('no detour is offered for a target the direct route already exceeds', () => {
+  // 5 km apart, but the road is 1.3x that, so anything under 6.5 km is unreachable.
+  assert.equal(detourOffsetM(5000, 6000, 1.3), 0);
+  assert.equal(detourOffsetM(5000, 6500, 1.3), 0);
+  assert.equal(detourOffsetM(5000, 4000, 1), 0);
+  assert.equal(detourOffsetM(0, 9000, 1), 0);
+});
+
+test('the offset is the one that makes the detour come to the length asked for', () => {
+  const crow = 5000;
+  const h = detourOffsetM(crow, 13000, 1);
+  // Straight through the offset point, there and on, is what was asked for.
+  const length = 2 * Math.hypot(crow / 2, h);
+  assert.ok(Math.abs(length - 13000) < 1, `${length} should be 13000`);
+  // And at the midpoint it agrees with the closed form.
+  const closed = Math.sqrt((13000 / 2) ** 2 - (crow / 2) ** 2);
+  assert.ok(Math.abs(h - closed) < 1, `${h} vs ${closed}`);
+});
+
+test('a longer target needs a wider detour, and inflation shrinks it', () => {
+  const near = detourOffsetM(5000, 9000, 1);
+  const far = detourOffsetM(5000, 14000, 1);
+  assert.ok(far > near, `${far} should exceed ${near}`);
+  // Roads that already wander need less help to reach the same length.
+  assert.ok(detourOffsetM(5000, 9000, 1.3) < near);
+});
+
+test('an off-centre bulge still solves for the length asked for', () => {
+  const crow = 5000;
+  const h = detourOffsetM(crow, 11000, 1, 0.35);
+  const a = 0.35 * crow;
+  const length = Math.hypot(a, h) + Math.hypot(crow - a, h);
+  assert.ok(Math.abs(length - 11000) < 1, `${length} should be 11000`);
+});
+
+test('point to point refuses to run without a finish', async () => {
+  await assert.rejects(
+    () => search({
+      start: START,
+      targetDistanceM: 8000,
+      targetAscentM: 80,
+      shape: SHAPE_POINT_TO_POINT,
+      client: new FakeORS(constant(8000, 80)),
+      store: newStore(),
+    }),
+    /needs a finish/,
+  );
+});
+
+test('point to point starts and ends where it was told to', async () => {
+  const client = new FakeORS(roadLike());
+  await runP2P(client);
+
+  assert.ok(client.calls.length > 0);
+  for (const call of client.calls) {
+    const [firstLon, firstLat] = call.coordinates[0];
+    const [lastLon, lastLat] = call.coordinates[call.coordinates.length - 1];
+    assert.ok(Math.abs(firstLat - START.lat) < 1e-9 && Math.abs(firstLon - START.lon) < 1e-9);
+    assert.ok(Math.abs(lastLat - P2P_FINISH.lat) < 1e-9 && Math.abs(lastLon - P2P_FINISH.lon) < 1e-9);
+    assert.equal(call.coordinates.length, 3, 'start, one detour point, finish');
+    assert.equal(call.roundTrip, null, 'a point to point route is not a round trip');
+  }
+});
+
+test('the route already paid for is never fetched a second time', async () => {
+  const client = new FakeORS(roadLike());
+  const direct = parseRoute(roadLike()(0, [
+    [START.lon, START.lat], [P2P_FINISH.lon, P2P_FINISH.lat],
+  ]));
+  await runP2P(client, { direct, distanceM: 9000 });
+
+  // Two coordinates means start and finish with nothing in between: that is
+  // the direct route, and the interface has already spent a request on it.
+  const refetched = client.calls.filter((c) => c.coordinates.length === 2);
+  assert.equal(refetched.length, 0, 'the direct route was asked for again');
+  assert.ok(client.calls.length > 0, 'nothing was searched at all');
+});
+
+test('against a road that bends predictably, it lands on the distance asked for', async () => {
+  const client = new FakeORS(roadLike(1.3));
+  const direct = parseRoute(roadLike(1.3)(0, [
+    [START.lon, START.lat], [P2P_FINISH.lon, P2P_FINISH.lat],
+  ]));
+  const result = await runP2P(client, { direct, distanceM: 9000, ascentM: 90 });
+
+  const best = result.candidates[0];
+  assert.ok(best, 'no candidates came back');
+  assert.equal(best.shape, SHAPE_POINT_TO_POINT);
+  assert.ok(best.relativeDistanceError < CONFIG.DISTANCE_TOLERANCE,
+    `${best.distanceM} m against 9000 m is ${(best.relativeDistanceError * 100).toFixed(1)}% out`);
+});
+
+test('point to point never spends more than the budget', async () => {
+  const client = new FakeORS(roadLike(), 4);
+  const result = await runP2P(client, { distanceM: 12000 });
+  assert.ok(client.requestsUsed <= 4, `${client.requestsUsed} requests against a budget of 4`);
+  assert.ok(result.candidates.length >= 0);
+});
+
+test('asking for the direct distance leaves only the direct route', async () => {
+  const client = new FakeORS(roadLike(1.3));
+  const direct = parseRoute(roadLike(1.3)(0, [
+    [START.lon, START.lat], [P2P_FINISH.lon, P2P_FINISH.lat],
+  ]));
+  const before = client.requestsUsed;
+  const result = await runP2P(client, { direct, distanceM: Math.round(direct.distanceM) });
+
+  assert.equal(client.requestsUsed, before, 'it went looking for a detour that cannot exist');
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].strategy, 'direct');
+});
 
 // --- ascent ----------------------------------------------------------------
 test('a noisy flat line gives near zero ascent', () => {

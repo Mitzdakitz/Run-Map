@@ -1,12 +1,14 @@
 /* UI: map, search form, ranked cards, elevation profile.
  * All search logic lives in routefinder.js; this file only presents it. */
-import { APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, STORAGE } from './config.js';
+import {
+  APP_VERSION, CONFIG, SHAPE_LOOP, SHAPE_OUT_AND_BACK, SHAPE_POINT_TO_POINT, STORAGE,
+} from './config.js';
 import {
   Candidate, OrsClient, RouteLibrary, TILE_SIZE, TerrainStore, TerrainTiles,
-  decodeTerrarium, diagnose, estimateSeconds, formatDuration, geocode, gradientAt,
-  gradientBand, insertWaypoint, insertionIndex, longestClimb, moveWaypoint, parsePace,
-  profile, readDiagnosis, removeWaypoint, reverseProfile, routeThrough, search,
-  steepestWindow, tileUrl,
+  decodeTerrarium, diagnose, directRoute, estimateSeconds, formatDuration, geocode,
+  gradientAt, gradientBand, insertWaypoint, insertionIndex, longestClimb, moveWaypoint,
+  parsePace, profile, readDiagnosis, removeWaypoint, reverseProfile, routeThrough,
+  search, steepestWindow, tileUrl,
 } from './routefinder.js';
 
 const $ = (id) => document.getElementById(id);
@@ -33,6 +35,13 @@ function safeStorage() {
 // --- state -----------------------------------------------------------------
 let map;
 let startMarker;
+let finishMarker;
+/* Where a point to point route ends, and the shortest it can be. `directM` is
+ * measured by routing the two points once, not guessed from the crow flies,
+ * because the road between them is always longer than the line. `key` is the
+ * pair it was measured for, so moving either pin invalidates it. */
+let finish = null;
+let floor = { key: null, directM: null, route: null };
 let store;
 let start = { ...CONFIG.DEFAULT_START };
 let paceSeconds = null;
@@ -488,15 +497,28 @@ function refreshStartLock() {
   // the start pin — and the pin is not on the map there anyway.
   const wanted = !plot.active && groups.length > 0 && $('searchPanel').hidden;
   startLocked = wanted;
-  if (!startMarker) return;
-  if (startMarker.dragging) {
-    if (wanted) startMarker.dragging.disable();
-    else startMarker.dragging.enable();
+  if (startMarker) {
+    if (startMarker.dragging) {
+      if (wanted) startMarker.dragging.disable();
+      else startMarker.dragging.enable();
+    }
+    if (startMarker.setTooltipContent) {
+      startMarker.setTooltipContent(wanted
+        ? 'Start and finish. Edit your search to move it.'
+        : 'Start and finish. Drag to move it.');
+    }
   }
-  if (startMarker.setTooltipContent) {
-    startMarker.setTooltipContent(wanted
-      ? 'Start and finish. Edit your search to move it.'
-      : 'Start and finish. Drag to move it.');
+  // The finish is as fixed as the start once routes have been found to it.
+  if (finishMarker) {
+    if (finishMarker.dragging) {
+      if (wanted) finishMarker.dragging.disable();
+      else finishMarker.dragging.enable();
+    }
+    if (finishMarker.setTooltipContent) {
+      finishMarker.setTooltipContent(wanted
+        ? 'Finish. Edit your search to move it.'
+        : 'Finish. Drag to move it.');
+    }
   }
 }
 
@@ -614,6 +636,113 @@ function setStart(lat, lon, name, { silent = false } = {}) {
     message('error', 'That start point is not a real position.');
   }
   write(STORAGE.startName, start.name);
+  // The shortest way between the two points was measured for the old pair.
+  refreshFloor();
+}
+
+const pointToPoint = () => $('shape').value === SHAPE_POINT_TO_POINT;
+
+/* A key for the pair, rounded to the precision routes are stored at, so nudging
+ * a pin by a metre does not spend a request re-measuring the same thing. */
+function floorKey() {
+  if (!finish) return null;
+  const p = CONFIG.COORD_PRECISION;
+  return [start.lat, start.lon, finish.lat, finish.lon]
+    .map((n) => n.toFixed(p)).join(',');
+}
+
+function setFinish(lat, lon, name) {
+  finish = { lat, lon, name: name || 'Finish' };
+  if (finishMarker) finishMarker.setLatLng([lat, lon]);
+  renderFinish();
+  refreshFloor();
+}
+
+function clearFinish() {
+  finish = null;
+  floor = { key: null, directM: null, route: null };
+  if (finishMarker && map) { map.removeLayer(finishMarker); finishMarker = null; }
+  renderFinish();
+  updateSummary();
+}
+
+/* Puts the finish on the map, and takes it off again when the shape does not
+ * have one. Made here rather than at boot because most searches never need it. */
+function renderFinish() {
+  if (!map) return;
+  const wanted = pointToPoint() && finish;
+  if (!wanted) {
+    if (finishMarker) { map.removeLayer(finishMarker); finishMarker = null; }
+    return;
+  }
+  if (!finishMarker) {
+    finishMarker = L.marker([finish.lat, finish.lon], {
+      draggable: true, icon: finishIcon(), zIndexOffset: 1000,
+    }).addTo(map);
+    finishMarker.bindTooltip('Finish. Drag to move it.', { direction: 'top', offset: [0, -14] });
+    finishMarker.on('dragend', () => {
+      const p = finishMarker.getLatLng();
+      setFinish(p.lat, p.lng, 'Dropped pin');
+    });
+  } else {
+    finishMarker.setLatLng([finish.lat, finish.lon]);
+  }
+}
+
+function finishIcon() {
+  return L.divIcon({
+    className: 'sf-icon',
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    html: `<svg width="28" height="28" viewBox="-14 -14 28 28" aria-hidden="true">
+             <circle r="12" fill="${mapEnd()}" stroke="#FFFFFF" stroke-width="2.5"/>
+             <g fill="#FFFFFF">
+               <rect x="-6" y="-6" width="6" height="6"/>
+               <rect x="0" y="0" width="6" height="6"/>
+             </g>
+           </svg>`,
+  });
+}
+
+/* The shortest the run can be, measured once for a pair of points and kept
+ * until one of them moves. It is also the zero-detour candidate the search
+ * starts from, so the request is not spent only on validation. */
+async function refreshFloor() {
+  if (!pointToPoint() || !finish) { renderFloorNote(); return; }
+  const key = floorKey();
+  if (floor.key === key && floor.directM !== null) { renderFloorNote(); return; }
+  floor = { key, directM: null, route: null };
+  renderFloorNote('measuring');
+  if (!apiKey) { renderFloorNote(); return; }
+  try {
+    const client = new OrsClient({ apiKey, budget: 1 });
+    const { route } = await directRoute(client, start, finish);
+    if (floorKey() !== key) return;      // a pin moved while we were asking
+    if (route) {
+      floor = { key, directM: route.distanceM, route };
+      store.addCoords(route.coords);
+      saveTerrainSoon();
+    }
+  } catch (err) {
+    message('warn', `Could not measure the way between these points: ${err.message}`);
+  }
+  renderFloorNote();
+  updateSummary();
+}
+
+function renderFloorNote(state) {
+  const note = $('finishNote');
+  if (!finish) {
+    note.textContent = 'Choose a finish, or drag the orange pin on the map.';
+    return;
+  }
+  if (state === 'measuring') { note.textContent = `Finish: ${finish.name}. Measuring…`; return; }
+  if (floor.directM === null) {
+    note.textContent = `Finish: ${finish.name}.`;
+    return;
+  }
+  note.textContent = `Finish: ${finish.name}. The shortest way between these is `
+    + `${(floor.directM / 1000).toFixed(2)} km, so a run cannot be under that.`;
 }
 
 function renderSavedStarts() {
@@ -666,12 +795,40 @@ function targetAscentM(distanceKm) {
   return { metres: perKm * distanceKm, label: `${preset} (${perKm} m/km)` };
 }
 
+const SHAPE_NAMES = {
+  [SHAPE_LOOP]: 'Loop',
+  [SHAPE_OUT_AND_BACK]: 'Out and back',
+  [SHAPE_POINT_TO_POINT]: 'To a finish',
+};
+
 function updateSummary() {
   const distanceKm = Number($('distance').value) || 0;
   const ascent = targetAscentM(distanceKm);
   $('sumDistance').textContent = `${distanceKm} km`;
   $('sumClimb').textContent = ascent.error ? '—' : `${Math.round(ascent.metres)} m`;
-  $('sumShape').textContent = $('shape').value === SHAPE_LOOP ? 'Loop' : 'Out and back';
+  $('sumShape').textContent = pointToPoint() && finish
+    ? `to ${finish.name}`
+    : (SHAPE_NAMES[$('shape').value] || 'Loop');
+  /* An instant guard while you type. The crow flies is a lower bound on the
+   * lower bound — the road is always longer — so it only ever catches the
+   * obviously impossible; the measured floor is what actually governs. */
+  const note = $('distanceFloorNote');
+  if (note) {
+    const crowM = finish ? haversineMetres(start.lat, start.lon, finish.lat, finish.lon) : 0;
+    const under = pointToPoint() && finish
+      && distanceKm * 1000 < (floor.directM ?? crowM);
+    note.hidden = !under;
+  }
+}
+
+/* Choosing a shape with a finish brings the finish row and its pin out, and
+ * putting it away again takes the pin with it. */
+function renderShape() {
+  const on = pointToPoint();
+  $('finishRow').hidden = !on;
+  renderFinish();
+  if (on) refreshFloor();
+  updateSummary();
 }
 
 // --- loading runner --------------------------------------------------------
@@ -784,10 +941,26 @@ async function runSearch() {
     message('error', `Distance must be between ${CONFIG.MIN_DISTANCE_KM} and ${CONFIG.MAX_DISTANCE_KM} km.`);
     return;
   }
-  const ascent = targetAscentM(distanceKm);
+  const shape = $('shape').value;
+  if (shape === SHAPE_POINT_TO_POINT && !finish) {
+    message('error', 'Choose a finish, or drag the orange pin, before searching for a route to it.');
+    return;
+  }
+
+  /* No run between two points can be shorter than the shortest way between
+   * them. Rather than refuse, take the target up to the floor and say so: the
+   * number you typed is a preference, and the ground decides the minimum. */
+  let targetDistanceM = distanceKm * 1000;
+  let clamped = null;
+  if (shape === SHAPE_POINT_TO_POINT && floor.directM !== null
+      && targetDistanceM < floor.directM) {
+    clamped = floor.directM;
+    targetDistanceM = floor.directM;
+  }
+
+  const ascent = targetAscentM(targetDistanceM / 1000);
   if (ascent.error) { message('error', ascent.error); return; }
 
-  const shape = $('shape').value;
   /* The targets are set, so the panel that sets them gets out of the way: the
    * results arrive underneath it otherwise. Only once the search is actually
    * going — a rejected one leaves the panel open on the field that was wrong. */
@@ -799,8 +972,16 @@ async function runSearch() {
    * few hundred metres of its ideal point, so that is the area worth knowing.
    * These tiles cost no routing requests and carry no key. */
   showLoading('Reading the shape of the ground around your start\u2026');
-  const reach = distanceKm * 1000 * (CONFIG.LOOP_WAYPOINT_FACTOR + CONFIG.TERRAIN_SEARCH_RADIUS_FRACTION);
-  const ground = await harvestTerrain(start.lat, start.lon, Math.max(1500, reach));
+  const reach = targetDistanceM * (CONFIG.LOOP_WAYPOINT_FACTOR + CONFIG.TERRAIN_SEARCH_RADIUS_FRACTION);
+  /* A route to a finish leaves the ground around the start behind, so harvest
+   * around the middle of the two and wide enough to cover both. */
+  const centre = finish && shape === SHAPE_POINT_TO_POINT
+    ? { lat: (start.lat + finish.lat) / 2, lon: (start.lon + finish.lon) / 2 }
+    : start;
+  const span = finish && shape === SHAPE_POINT_TO_POINT
+    ? haversineMetres(start.lat, start.lon, finish.lat, finish.lon)
+    : 0;
+  const ground = await harvestTerrain(centre.lat, centre.lon, Math.max(1500, reach, span));
 
   showLoading(`Generating and measuring candidate routes. Up to ${CONFIG.REQUEST_BUDGET} requests, `
     + 'spaced out to stay inside the free tier, so give it half a minute.');
@@ -809,18 +990,31 @@ async function runSearch() {
   try {
     const result = await search({
       start: { lat: start.lat, lon: start.lon },
-      targetDistanceM: distanceKm * 1000,
+      finish: finish ? { lat: finish.lat, lon: finish.lon } : null,
+      targetDistanceM,
       targetAscentM: ascent.metres,
       shape,
       client,
       store,
+      // Already paid for when the finish landed, and a real answer when what
+      // you asked for is close to the direct route.
+      direct: shape === SHAPE_POINT_TO_POINT ? floor.route : null,
     });
+    if (clamped !== null) {
+      result.warnings.unshift(
+        `${distanceKm} km is shorter than the shortest way between these two points, `
+        + `so the search aimed at ${(clamped / 1000).toFixed(2)} km instead.`,
+      );
+    }
     // Deferred: writing a megabyte and a half of terrain here would stall the
     // moment the results appear, which is the worst moment to stall.
     saveTerrainSoon();
     clearMessages();
     handleResult(result, {
-      distanceKm, ascentM: ascent.metres, climbLabel: ascent.label, shape,
+      distanceKm: targetDistanceM / 1000,
+      ascentM: ascent.metres,
+      climbLabel: ascent.label,
+      shape,
     }, client, ground);
   } catch (err) {
     clearMessages();
@@ -950,8 +1144,13 @@ function renderCards() {
     if (group.target && (gi > 0 || groups.length > 1)) {
       const heading = document.createElement('div');
       heading.className = 'group-heading';
-      heading.textContent = `Search ${group.number}: ${group.target.distanceKm} km, `
-        + `${Math.round(group.target.ascentM)} m, ${group.target.shape === SHAPE_LOOP ? 'loop' : 'out and back'}`;
+      /* Rounded, because a clamped target is whatever the ground made it and
+       * reads as 2.8928405797594365 otherwise, and named from the same table
+       * the summary uses so a third shape cannot be labelled as the second. */
+      heading.textContent = `Search ${group.number}: `
+        + `${Number(group.target.distanceKm).toFixed(2)} km, `
+        + `${Math.round(group.target.ascentM)} m, `
+        + `${(SHAPE_NAMES[group.target.shape] || 'Loop').toLowerCase()}`;
       host.appendChild(heading);
     }
     const dom = domainFor(group);
@@ -2116,9 +2315,14 @@ function deleteSaved(id, name) {
 }
 
 let geocodeTimer = null;
-function onPlaceInput(value) {
+/* One place search serving both pins. `which` decides which one a hit lands on
+ * and which list the hits are drawn into; everything else about looking a place
+ * up is the same, so it is not worth a second copy. */
+function onPlaceInput(value, which = 'start') {
+  const forFinish = which === 'finish';
   clearTimeout(geocodeTimer);
-  const results = $('searchResults');
+  const results = $(forFinish ? 'finishResults' : 'searchResults');
+  const box = $(forFinish ? 'finishSearch' : 'placeSearch');
   if (value.trim().length < 2) { results.hidden = true; results.textContent = ''; return; }
   geocodeTimer = setTimeout(async () => {
     try {
@@ -2134,10 +2338,12 @@ function onPlaceInput(value) {
         row.type = 'button';
         row.innerHTML = `<span class="what">${hit.label}</span><span class="where">${hit.locality}</span>`;
         row.addEventListener('click', () => {
-          setStart(hit.lat, hit.lon, hit.label.split(',')[0]);
+          const name = hit.label.split(',')[0];
+          if (forFinish) setFinish(hit.lat, hit.lon, name);
+          else setStart(hit.lat, hit.lon, name);
           if (map) map.setView([hit.lat, hit.lon], Math.max(map.getZoom(), CONFIG.DEFAULT_ZOOM));
           results.hidden = true;
-          $('placeSearch').value = '';
+          box.value = '';
           updateSummary();
         });
         results.appendChild(row);
@@ -2177,9 +2383,17 @@ function locateMe() {
 function wireEvents() {
   $('editSearch').addEventListener('click', () => setSearchPanel($('searchPanel').hidden));
 
-  ['distance', 'climbPreset', 'climbExact', 'shape'].forEach((id) => {
+  ['distance', 'climbPreset', 'climbExact'].forEach((id) => {
     $(id).addEventListener('input', updateSummary);
     $(id).addEventListener('change', updateSummary);
+  });
+  $('shape').addEventListener('input', renderShape);
+  $('shape').addEventListener('change', renderShape);
+
+  $('finishSearch').addEventListener('input', (e) => onPlaceInput(e.target.value, 'finish'));
+  $('clearFinish').addEventListener('click', () => {
+    $('finishSearch').value = '';
+    clearFinish();
   });
 
   $('searchBtn').addEventListener('click', runSearch);

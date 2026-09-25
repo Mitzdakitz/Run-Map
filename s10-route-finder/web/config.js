@@ -1,7 +1,7 @@
 /* Everything worth recalibrating. Mirrors config.py in the server version. */
 // Bumped whenever the app changes, and shown in Settings. If the version on
 // screen is not the one you expect, the browser is serving you cached files.
-export const APP_VERSION = '2026-09-24.4';
+export const APP_VERSION = '2026-09-25.1';
 
 export const CONFIG = {
   // --- OpenRouteService ---------------------------------------------------
@@ -21,6 +21,14 @@ export const CONFIG = {
   LOOP_WAYPOINT_FACTOR: 0.25,
   OUT_AND_BACK_DESTINATIONS: 7,
   OUT_AND_BACK_FACTOR: 0.38,
+  /* Point to point has no equivalent of OUT_AND_BACK_FACTOR to calibrate: how
+   * far off the direct line to send you follows from the distance you asked
+   * for and the distance the road actually is, both of which are measured. All
+   * that is tunable is how many shapes to try. */
+  P2P_DESTINATIONS: 6,
+  // Where along the A-B line the detour bulges. 0.5 is the midpoint; the others
+  // lean the route towards one end, which reaches different ground.
+  P2P_BULGE_POSITIONS: [0.5, 0.35, 0.65],
 
   // --- Start point and bounds --------------------------------------------
   DEFAULT_START: { lat: 53.3736, lon: -1.5040 },   // Broomhill / Crookes, S10
@@ -123,3 +131,4 @@ export const STORAGE = {
 
 export const SHAPE_LOOP = 'loop';
 export const SHAPE_OUT_AND_BACK = 'out_and_back';
+export const SHAPE_POINT_TO_POINT = 'point_to_point';
